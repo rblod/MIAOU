@@ -1,0 +1,5 @@
+&output_dyn
+  dyn_vars(1) = "zeta", .true., .true., .false., "", 3600.
+  dyn_vars(2) = "u",    .false., .false., .true., "",  2.
+  dyn_vars(3) = "v",    .false., .false., .true., "restart.nc", 900.0
+/
