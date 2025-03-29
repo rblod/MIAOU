@@ -1,5 +1,11 @@
+&output_global
+  his_prefix = "history"
+  avg_prefix = "average"
+  rst_prefix = "restart"
+/
+
 &output_dyn
-  dyn_vars(1) = "zeta", .true., .true., .false., "", 3600.
-  dyn_vars(2) = "u",    .false., .false., .true., "",  2.
-  dyn_vars(3) = "v",    .false., .false., .true., "restart.nc", 900.0
+  dyn_vars(1) = "zeta", .true., .true., .false., "", 3600., 7200., -1.
+  dyn_vars(2) = "u",    .false., .false., .true., "", -1., -1., 9000.
+  dyn_vars(3) = "v",    .false., .false., .true., "special", -1., -1., 7200.
 /

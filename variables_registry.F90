@@ -52,7 +52,10 @@ contains
             var_zeta%to_his = dyn_vars(i)%wrt
             var_zeta%to_avg = dyn_vars(i)%avg
             var_zeta%to_rst = dyn_vars(i)%rst
-            var_zeta%freq = dyn_vars(i)%freq
+            var_zeta%freq_his = dyn_vars(i)%freq_his
+            var_zeta%freq_avg = dyn_vars(i)%freq_avg
+            var_zeta%freq_rst = dyn_vars(i)%freq_rst
+            var_zeta%file_prefix = dyn_vars(i)%file_prefix  ! Stocke le préfixe de fichier
             var_zeta%data => zeta
             call register_variable(var_zeta)
          case ("temp")
@@ -64,7 +67,10 @@ contains
             var_t%to_his = dyn_vars(i)%wrt
             var_t%to_avg = dyn_vars(i)%avg
             var_t%to_rst = dyn_vars(i)%rst
-            var_t%freq = dyn_vars(i)%freq
+            var_t%freq_his = dyn_vars(i)%freq_his
+            var_t%freq_avg = dyn_vars(i)%freq_avg
+            var_t%freq_rst = dyn_vars(i)%freq_rst
+            var_t%file_prefix = dyn_vars(i)%file_prefix  ! Stocke le préfixe de fichier
             var_t%data => temp(:, :, 1)
             call register_variable(var_t)
          case ("u")
@@ -76,7 +82,10 @@ contains
             var_u%to_his = dyn_vars(i)%wrt
             var_u%to_avg = dyn_vars(i)%avg
             var_u%to_rst = dyn_vars(i)%rst
-            var_u%freq = dyn_vars(i)%freq
+            var_u%freq_his = dyn_vars(i)%freq_his
+            var_u%freq_avg = dyn_vars(i)%freq_avg
+            var_u%freq_rst = dyn_vars(i)%freq_rst
+            var_u%file_prefix = dyn_vars(i)%file_prefix  ! Stocke le préfixe de fichier
             var_u%data => u
             call register_variable(var_u)
          case ("v")
@@ -88,7 +97,10 @@ contains
             var_v%to_his = dyn_vars(i)%wrt
             var_v%to_avg = dyn_vars(i)%avg
             var_v%to_rst = dyn_vars(i)%rst
-            var_v%freq = dyn_vars(i)%freq
+            var_v%freq_his = dyn_vars(i)%freq_his
+            var_v%freq_avg = dyn_vars(i)%freq_avg
+            var_v%freq_rst = dyn_vars(i)%freq_rst
+            var_v%file_prefix = dyn_vars(i)%file_prefix  ! Stocke le préfixe de fichier
             var_v%data => v(:, :)
             call register_variable(var_v)
          end select
