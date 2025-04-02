@@ -1,5 +1,5 @@
 !>
-!>
+!> Pseudo variables to be written
 !>
 module ocean_var
 

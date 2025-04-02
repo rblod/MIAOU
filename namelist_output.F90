@@ -1,43 +1,53 @@
-!>
-!>
+!>  
+!>  Module to read output info in a namelist
 !>
 module namelist_output
    implicit none
 
-   ! Configuration globale
+   ! Global configuration 
    character(len=128) :: his_prefix = "history"
+   !! global history file name
    character(len=128) :: avg_prefix = "average"
+   !! global average file name
    character(len=128) :: rst_prefix = "restart"
+   !! global restart file name
 
    type :: var_output_config
+   !! the type used for namelist to get the informations
       character(len=32)  :: name
-      logical            :: wrt = .false.
-      logical            :: avg = .false.
-      logical            :: rst = .false.
-      character(len=128) :: file_prefix = ""  
-      real               :: freq_his = -1.0   ! Fréquence pour history
-      real               :: freq_avg = -1.0   ! Fréquence pour average
-      real               :: freq_rst = -1.0   ! Fréquence pour restart
+      logical            :: wrt = .false.     !! Write his
+      logical            :: avg = .false.     !! Write avg 
+      logical            :: rst = .false.     !! Write rst 
+      character(len=128) :: file_prefix = ""  !! History file
+      real               :: freq_his = -1.0   !! History frequency
+      real               :: freq_avg = -1.0   !! Average frequency
+      real               :: freq_rst = -1.0   !! Restart frequency
    end type
 
-   type(var_output_config), allocatable :: dyn_vars(:)
 
-   ! La nouvelle structure de la namelist
+   type(var_output_config), allocatable :: dyn_vars(:)
+   !! variables read the namelist
+
+   ! 
    namelist /output_global/ his_prefix, avg_prefix, rst_prefix
    namelist /output_dyn/ dyn_vars
 
 contains
 !>
 !>
-!> @param
+!> Read global and indivual infos
 !>
-!> @param
+!> 
 
    subroutine read_output_namelist()
       integer :: ios, i, n_read
+      !! dummy index and logical
       type(var_output_config), allocatable :: tmp(:)
+      !! temporary 
 
       integer, parameter :: maxvars = 100
+      !! Maximum variables to be read in namelist
+
       allocate (dyn_vars(maxvars))
       dyn_vars(:)%name = ""
       dyn_vars(:)%wrt = .false.
@@ -48,7 +58,7 @@ contains
       dyn_vars(:)%freq_avg = -1.0
       dyn_vars(:)%freq_rst = -1.0
 
-      ! Ouverture du fichier
+      ! Open file
       open (unit=10, file="output_config.nml", status="old", action="read", iostat=ios)
       if (ios /= 0) then
          print *, "Warning: Cannot open output_config.nml, using defaults."
@@ -56,14 +66,14 @@ contains
          return
       end if
 
-      !> Reading des préfixes globaux
+      ! Read global prefix
       read (10, nml=output_global, iostat=ios)
       if (ios /= 0) then
          print *, "Warning: Error reading namelist /output_global/, using defaults."
-         rewind (10)  ! Revenir au début du fichier pour la prochaine lecture
+         rewind (10)  ! Come back at the beginning
       end if
 
-      !> Reading des variables dynamiques
+      ! Read variables and attributes
       read (10, nml=output_dyn, iostat=ios)
       if (ios /= 0) then
          print *, "Warning: Error reading namelist /output_dyn/"
@@ -73,7 +83,7 @@ contains
       end if
       close (10)
 
-      ! Compter le nombre de variables effectivement lues
+      ! Count of variables read
       n_read = 0
       do i = 1, size(dyn_vars)
          if (trim(dyn_vars(i)%name) /= "") then
@@ -83,7 +93,7 @@ contains
          end if
       end do
 
-      ! Copier vers tableau redimensionné
+      ! copy to temporary array and correct dimensions for dyn_var
       if (n_read > 0) then
          call move_alloc(dyn_vars, tmp)
          allocate (dyn_vars(n_read))
