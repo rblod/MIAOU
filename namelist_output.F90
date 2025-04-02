@@ -1,10 +1,10 @@
-!>  
+!>
 !>  Module to read output info in a namelist
 !>
 module namelist_output
    implicit none
 
-   ! Global configuration 
+   ! Global configuration
    character(len=128) :: his_prefix = "history"
    !! global history file name
    character(len=128) :: avg_prefix = "average"
@@ -16,19 +16,18 @@ module namelist_output
    !! the type used for namelist to get the informations
       character(len=32)  :: name
       logical            :: wrt = .false.     !! Write his
-      logical            :: avg = .false.     !! Write avg 
-      logical            :: rst = .false.     !! Write rst 
+      logical            :: avg = .false.     !! Write avg
+      logical            :: rst = .false.     !! Write rst
       character(len=128) :: file_prefix = ""  !! History file
       real               :: freq_his = -1.0   !! History frequency
       real               :: freq_avg = -1.0   !! Average frequency
       real               :: freq_rst = -1.0   !! Restart frequency
    end type
 
-
    type(var_output_config), allocatable :: dyn_vars(:)
    !! variables read the namelist
 
-   ! 
+   !
    namelist /output_global/ his_prefix, avg_prefix, rst_prefix
    namelist /output_dyn/ dyn_vars
 
@@ -37,13 +36,13 @@ contains
 !>
 !> Read global and indivual infos
 !>
-!> 
+!>
 
    subroutine read_output_namelist()
       integer :: ios, i, n_read
       !! dummy index and logical
       type(var_output_config), allocatable :: tmp(:)
-      !! temporary 
+      !! temporary
 
       integer, parameter :: maxvars = 100
       !! Maximum variables to be read in namelist

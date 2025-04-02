@@ -5,7 +5,7 @@
 /
 
 &output_dyn
-  dyn_vars(1) = "zeta", .true., .true., .false., "", 3600., 7200., -1.
+  dyn_vars(1) = "zeta", .true., .true., .false., "zeta", 3600., 7200., -1.
   dyn_vars(2) = "u",    .false., .false., .true., "", -1., -1., 9000.
   dyn_vars(3) = "v",    .false., .false., .true., "special", -1., -1., 7200.
 /
