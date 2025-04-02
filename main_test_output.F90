@@ -13,11 +13,11 @@ program main_test_output
    character(len=128) :: time_units, calendar
 
    ! Allocation des champs de test
-   allocate(zeta(nx, ny))
-   allocate(temp(nx, ny, nz))
-   allocate(u(nx, ny))
-   allocate(v(nx, ny))
-   
+   allocate (zeta(nx, ny))
+   allocate (temp(nx, ny, nz))
+   allocate (u(nx, ny))
+   allocate (v(nx, ny))
+
    ! Initialisation des données
    zeta = 0.; temp = 0.
    u = 0.; v = 0.
@@ -41,7 +41,7 @@ program main_test_output
       zeta = zeta + 0.1*t
       temp(:, :, 1) = temp(:, :, 1) + 0.2*t
       u = t
-      v = t * 0.5
+      v = t*0.5
 
       ! Écriture de toutes les sorties selon leurs fréquences configurées
       call write_all_outputs(current_time)
@@ -51,7 +51,7 @@ program main_test_output
    call close_all_output_files()
 
    ! Libération de la mémoire
-   deallocate(zeta, temp, u, v)
+   deallocate (zeta, temp, u, v)
 
    print *, "Simulation terminée avec succès!"
 

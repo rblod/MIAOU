@@ -1,6 +1,10 @@
 !===============================================================================
-! variables_registry.F90 : Declarations of all nc_var variables with defaults
+!> Variables_registry.F90 : Declarations of all nc_var variables with defaults
 !===============================================================================
+!>
+!>
+!>
+!>
 module variables_registry
    use file_manager
    use namelist_output
@@ -10,6 +14,13 @@ module variables_registry
    type(nc_var) :: var_zeta, var_t, var_u, var_v
 
 contains
+!>
+!>
+!> Initializes all nc_var variables with associated metadata and grids.
+!>
+!> @param nx, ny, nz
+!>
+!> @param nx, ny, nz
 
    subroutine init_variables(nx, ny, nz)
       integer, intent(in) :: nx, ny, nz

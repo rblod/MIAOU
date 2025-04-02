@@ -1,3 +1,6 @@
+!>
+!>
+!>
 module namelist_output
    implicit none
 
@@ -11,19 +14,24 @@ module namelist_output
       logical            :: wrt = .false.
       logical            :: avg = .false.
       logical            :: rst = .false.
-      character(len=128) :: file_prefix = ""  ! Préfixe spécifique à la variable (optionnel)
+      character(len=128) :: file_prefix = ""  
       real               :: freq_his = -1.0   ! Fréquence pour history
       real               :: freq_avg = -1.0   ! Fréquence pour average
       real               :: freq_rst = -1.0   ! Fréquence pour restart
    end type
 
    type(var_output_config), allocatable :: dyn_vars(:)
-   
+
    ! La nouvelle structure de la namelist
    namelist /output_global/ his_prefix, avg_prefix, rst_prefix
    namelist /output_dyn/ dyn_vars
 
 contains
+!>
+!>
+!> @param
+!>
+!> @param
 
    subroutine read_output_namelist()
       integer :: ios, i, n_read
@@ -48,14 +56,14 @@ contains
          return
       end if
 
-      ! Lecture des préfixes globaux
+      !> Reading des préfixes globaux
       read (10, nml=output_global, iostat=ios)
       if (ios /= 0) then
          print *, "Warning: Error reading namelist /output_global/, using defaults."
-         rewind(10)  ! Revenir au début du fichier pour la prochaine lecture
+         rewind (10)  ! Revenir au début du fichier pour la prochaine lecture
       end if
 
-      ! Lecture des variables dynamiques
+      !> Reading des variables dynamiques
       read (10, nml=output_dyn, iostat=ios)
       if (ios /= 0) then
          print *, "Warning: Error reading namelist /output_dyn/"
