@@ -340,6 +340,7 @@ contains
 !> @param ncid, tag, time_value
 
    subroutine write_output(ncid, tag, time_value)
+      use ocean_var, only: dt  ! Importer le pas de temps depuis ocean_var
       integer, intent(in) :: ncid
       character(len=*), intent(in) :: tag
       real, intent(in) :: time_value
@@ -486,7 +487,7 @@ contains
                if (abs(time_value) < TOL) then
                   steps_since_last_write = 1
                else
-                  steps_since_last_write = nint(freq/1800.0)  ! AVG
+                  steps_since_last_write = nint(freq/dt)  ! AVG
                end if
 
                ! Something to write
@@ -534,47 +535,60 @@ contains
 !>
 !> @param time_units, calendar
 
-   subroutine initialize_output_files(time_units, calendar)
-      character(len=*), intent(in), optional :: time_units, calendar
-      integer :: i, ncid_his, ncid_avg, ncid_rst
-      real :: freq
+! Refactored version of initialize_output_files
+subroutine initialize_output_files(time_units, calendar)
+   character(len=*), intent(in), optional :: time_units, calendar
+   integer :: i, j, ncid
+   real :: freq
+   logical :: file_needed
+   character(len=16) :: file_types(3) = ["his", "avg", "rst"]
 
-      ! Some checks
-      if (.not. allocated(registered_vars)) then
-         print *, "Warning: No variables registered before initializing output files"
-         return
-      end if
+   ! Check if variables are registered
+   if (.not. allocated(registered_vars)) then
+      print *, "Warning: No variables registered before initializing output files"
+      return
+   end if
 
-      ! Create the files
+   ! Loop through all file types
+   do j = 1, size(file_types)
+      
+      ! Iterate through all variables
       do i = 1, size(registered_vars)
-         ! History
-         if (registered_vars(i)%to_his) then
-            freq = registered_vars(i)%freq_his
-            ncid_his = find_or_create_file(trim(registered_vars(i)%file_prefix), &
-                                           "his", freq, time_units, calendar)
-            call define_output_file(ncid_his, "his")
-            call check(nf90_enddef(ncid_his))
-         end if
-
-         ! Average
-         if (registered_vars(i)%to_avg) then
-            freq = registered_vars(i)%freq_avg
-            ncid_avg = find_or_create_file(trim(registered_vars(i)%file_prefix), &
-                                           "avg", freq, time_units, calendar)
-            call define_output_file(ncid_avg, "avg")
-            call check(nf90_enddef(ncid_avg))
-         end if
-
-         ! Restart
-         if (registered_vars(i)%to_rst) then
-            freq = registered_vars(i)%freq_rst
-            ncid_rst = find_or_create_file(trim(registered_vars(i)%file_prefix), &
-                                           "rst", freq, time_units, calendar)
-            call define_output_file(ncid_rst, "rst")
-            call check(nf90_enddef(ncid_rst))
+         file_needed = .false.
+         
+         ! Check if this file type is needed for this variable
+         select case (trim(file_types(j)))
+         case ("his")
+            if (registered_vars(i)%to_his) then
+               file_needed = .true.
+               freq = registered_vars(i)%freq_his
+            end if
+         case ("avg")
+            if (registered_vars(i)%to_avg) then
+               file_needed = .true.
+               freq = registered_vars(i)%freq_avg
+            end if
+         case ("rst")
+            if (registered_vars(i)%to_rst) then
+               file_needed = .true.
+               freq = registered_vars(i)%freq_rst
+            end if
+         end select
+         
+         ! If needed, create the file and define its variables
+         if (file_needed) then
+            ncid = find_or_create_file(trim(registered_vars(i)%file_prefix), &
+                                      trim(file_types(j)), freq, time_units, calendar)
+            call define_output_file(ncid, trim(file_types(j)))
+            call check(nf90_enddef(ncid))
+            
+            ! Once we've handled this file for this variable,
+            ! we can move to the next variable
+            exit
          end if
       end do
-   end subroutine initialize_output_files
+   end do
+end subroutine initialize_output_files
 !>
 !>
 !> @param

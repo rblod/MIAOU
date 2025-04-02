@@ -36,7 +36,7 @@ program main_test_output
    ! Time loop
    do t = 1, nt
       ! Time ins second
-      current_time = (t - 1)*1800.0
+      current_time = (t - 1)*dt
 
       ! Fill values for test
       zeta = zeta + 0.1*t
