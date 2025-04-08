@@ -9,6 +9,7 @@ module variables_registry
    use file_manager
    use namelist_output
    use ocean_var
+   use grid_module      ! Nouveau module de grille
    implicit none
 
    type(nc_var) :: var_zeta, var_t, var_u, var_v
@@ -25,7 +26,7 @@ contains
 
    subroutine init_variables(nx, ny, nz)
       integer, intent(in) :: nx, ny, nz
-      type(grid) :: grd_2d, grd_3d
+      type(grid) :: grd_2d, grd_3d    ! Utilisation du nouveau type grid
       integer :: i
 
       call read_output_namelist()
@@ -33,24 +34,12 @@ contains
       !-------------------------!
       ! 2D grid for zeta
       !-------------------------!
-      grd_2d%name = "rho2d"
-      allocate (grd_2d%dim_names(2))
-      allocate (grd_2d%dim_sizes(2))
-      allocate (grd_2d%dim_ids(2))
-      grd_2d%dim_names = [character(len=7) :: "xi_rho", "eta_rho"]
-      grd_2d%dim_sizes = [nx, ny]
-      grd_2d%dim_ids = -1
+      grd_2d = create_rho_grid_2d(nx, ny)  ! Utilisation de la fonction du nouveau module
 
       !-------------------------!
       ! 3D grid for temperature
       !-------------------------!
-      grd_3d%name = "rho3d"
-      allocate (grd_3d%dim_names(3))
-      allocate (grd_3d%dim_sizes(3))
-      allocate (grd_3d%dim_ids(3))
-      grd_3d%dim_names = [character(len=7) :: "xi_rho", "eta_rho", "s_rho"]
-      grd_3d%dim_sizes = [nx, ny, nz]
-      grd_3d%dim_ids = -1
+      grd_3d = create_rho_grid_3d(nx, ny, nz)  ! Utilisation de la fonction du nouveau module
 
       ! Review of all read variables, at this point dyn__vars contains only
       ! the ouputs requested. Here we do the correspondance between the 2 types

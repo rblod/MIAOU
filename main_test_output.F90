@@ -1,10 +1,11 @@
 !===============================================================================
-! main_test_output.F90 : Minimal test program for file_manager and variables_registry
+! main_test_output_new.F90 : Test program for new grid module integration
 !===============================================================================
 program main_test_output
    use file_manager
    use variables_registry
    use ocean_var
+   use grid_module
 
    implicit none
 
@@ -60,6 +61,6 @@ program main_test_output
    ! Deallocate memory
    deallocate (zeta, temp, u, v)
 
-   print *, "Success!"
+   print *, "Test with new grid module completed successfully!"
 
 end program main_test_output
