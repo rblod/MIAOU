@@ -47,7 +47,8 @@ contains
       integer, parameter :: maxvars = 100
       !! Maximum variables to be read in namelist
 
-      allocate (dyn_vars(maxvars))
+      ! Votre lecture du namelist doit ressembler à ceci :
+      allocate(dyn_vars(maxvars))
       dyn_vars(:)%name = ""
       dyn_vars(:)%wrt = .false.
       dyn_vars(:)%avg = .false.
@@ -57,30 +58,31 @@ contains
       dyn_vars(:)%freq_avg = -1.0
       dyn_vars(:)%freq_rst = -1.0
 
-      ! Open file
-      open (unit=10, file="output_config.nml", status="old", action="read", iostat=ios)
+      ! Lecture du namelist
+      open(unit=10, file="output_config.nml", status="old", action="read", iostat=ios)
       if (ios /= 0) then
-         print *, "Warning: Cannot open output_config.nml, using defaults."
-         allocate (dyn_vars(0))
+         print *, "Warning: Cannot open output_config.nml, using defaults. Error code:", ios
+         deallocate(dyn_vars)
+         allocate(dyn_vars(0))
          return
       end if
 
-      ! Read global prefix
-      read (10, nml=output_global, iostat=ios)
+      ! Lire les préfixes globaux
+      read(10, nml=output_global, iostat=ios)
       if (ios /= 0) then
-         print *, "Warning: Error reading namelist /output_global/, using defaults."
-         rewind (10)  ! Come back at the beginning
+         print *, "Warning: Error reading namelist /output_global/, using defaults. Error code:", ios
+         rewind(10)
       end if
 
-      ! Read variables and attributes
-      read (10, nml=output_dyn, iostat=ios)
-      if (ios /= 0) then
-         print *, "Warning: Error reading namelist /output_dyn/"
-         allocate (dyn_vars(0))
-         close (10)
-         return
-      end if
-      close (10)
+      ! Lire les variables et leurs attributs
+read (10, nml=output_dyn, iostat=ios)
+if (ios /= 0) then
+   print *, "Warning: Error reading namelist /output_dyn/"
+   if (allocated(dyn_vars)) deallocate(dyn_vars)  ! Assurez-vous d'abord qu'il est alloué
+   allocate (dyn_vars(0))  ! Réallouez directement, pas via move_alloc
+   close (10)
+   return
+end if
 
       ! Count of variables read
       n_read = 0

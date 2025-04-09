@@ -1,5 +1,5 @@
 !===============================================================================
-! grid_module.F90 : Module for axis and grid definitions and operations
+! grid_module.F90 : Enhanced module for axis and grid definitions and operations
 !===============================================================================
 module grid_module
    use netcdf, only: nf90_unlimited
@@ -10,7 +10,8 @@ module grid_module
    public :: axis, grid
 
    ! Public procedures
-   public :: create_axis, create_rho_grid_2d, create_rho_grid_3d
+   public :: create_axis, create_empty_grid, create_1d_grid, create_2d_grid, create_3d_grid
+   public :: create_rho_grid_2d, create_rho_grid_3d
    public :: create_time_axis, add_time_to_grid, get_time_dim_index
 
    ! Definition of a basic axis
@@ -152,6 +153,128 @@ contains
          new_axis%is_unlimited = .false.
       end if
    end function create_axis
+   
+   ! Create an empty (0D) grid for scalar variables
+   function create_empty_grid() result(empty_grid)
+      type(grid) :: empty_grid
+      
+      ! Initialize with no axes
+      empty_grid%name = "scalar"
+      empty_grid%ndims = 0
+      
+      ! No axes to allocate
+   end function create_empty_grid
+   
+   ! Create a 1D grid with flexible naming
+   ! Create a 1D grid with flexible naming
+   function create_1d_grid(nx, x_name, x_long, x_unit) result(grid_1d)
+      integer, intent(in) :: nx
+      character(len=*), intent(in), optional :: x_name, x_long, x_unit
+      type(grid) :: grid_1d
+      type(axis) :: x_axis
+      character(len=32) :: x_name_local, x_unit_local
+      character(len=64) :: x_long_local
+      
+      ! Define default values and override if parameter is present
+      x_name_local = "x_dim"
+      if (present(x_name)) x_name_local = x_name
+      
+      x_long_local = "X dimension"
+      if (present(x_long)) x_long_local = x_long
+      
+      x_unit_local = "count"
+      if (present(x_unit)) x_unit_local = x_unit
+      
+      ! Create the axis with local values
+      x_axis = create_axis(x_name_local, x_long_local, x_unit_local, nx)
+      
+      call grid_1d%init_from_axes("grid_1d", [x_axis])
+   end function create_1d_grid
+
+   ! Create a 2D grid with flexible naming
+   function create_2d_grid(nx, ny, x_name, y_name, x_long, y_long, x_unit, y_unit) result(grid_2d)
+      integer, intent(in) :: nx, ny
+      character(len=*), intent(in), optional :: x_name, y_name, x_long, y_long, x_unit, y_unit
+      type(grid) :: grid_2d
+      type(axis) :: x_axis, y_axis
+      character(len=32) :: x_name_local, y_name_local, x_unit_local, y_unit_local
+      character(len=64) :: x_long_local, y_long_local
+      
+      ! Définir les valeurs par défaut et les écraser si le paramètre est présent
+      x_name_local = "x_dim"
+      if (present(x_name)) x_name_local = x_name
+      
+      y_name_local = "y_dim"
+      if (present(y_name)) y_name_local = y_name
+      
+      x_long_local = "X dimension"
+      if (present(x_long)) x_long_local = x_long
+      
+      y_long_local = "Y dimension"
+      if (present(y_long)) y_long_local = y_long
+      
+      x_unit_local = "count"
+      if (present(x_unit)) x_unit_local = x_unit
+      
+      y_unit_local = "count"
+      if (present(y_unit)) y_unit_local = y_unit
+      
+      ! Créer les axes avec les valeurs locales
+      x_axis = create_axis(x_name_local, x_long_local, x_unit_local, nx)
+      y_axis = create_axis(y_name_local, y_long_local, y_unit_local, ny)
+      
+      call grid_2d%init_from_axes("grid_2d", [x_axis, y_axis])
+   end function create_2d_grid
+      
+   ! Create a 3D grid with flexible naming
+   ! Create a 3D grid with flexible naming
+   function create_3d_grid(nx, ny, nz, x_name, y_name, z_name, &
+                          x_long, y_long, z_long, &
+                          x_unit, y_unit, z_unit) result(grid_3d)
+      integer, intent(in) :: nx, ny, nz
+      character(len=*), intent(in), optional :: &
+         x_name, y_name, z_name, x_long, y_long, z_long, x_unit, y_unit, z_unit
+      type(grid) :: grid_3d
+      type(axis) :: x_axis, y_axis, z_axis
+      character(len=32) :: x_name_local, y_name_local, z_name_local
+      character(len=32) :: x_unit_local, y_unit_local, z_unit_local
+      character(len=64) :: x_long_local, y_long_local, z_long_local
+      
+      ! Define default values and override if parameter is present
+      x_name_local = "x_dim"
+      if (present(x_name)) x_name_local = x_name
+      
+      y_name_local = "y_dim"
+      if (present(y_name)) y_name_local = y_name
+      
+      z_name_local = "z_dim"
+      if (present(z_name)) z_name_local = z_name
+      
+      x_long_local = "X dimension"
+      if (present(x_long)) x_long_local = x_long
+      
+      y_long_local = "Y dimension"
+      if (present(y_long)) y_long_local = y_long
+      
+      z_long_local = "Z dimension"
+      if (present(z_long)) z_long_local = z_long
+      
+      x_unit_local = "count"
+      if (present(x_unit)) x_unit_local = x_unit
+      
+      y_unit_local = "count"
+      if (present(y_unit)) y_unit_local = y_unit
+      
+      z_unit_local = "levels"
+      if (present(z_unit)) z_unit_local = z_unit
+      
+      ! Create axes with local values
+      x_axis = create_axis(x_name_local, x_long_local, x_unit_local, nx)
+      y_axis = create_axis(y_name_local, y_long_local, y_unit_local, ny)
+      z_axis = create_axis(z_name_local, z_long_local, z_unit_local, nz)
+      
+      call grid_3d%init_from_axes("grid_3d", [x_axis, y_axis, z_axis])
+   end function create_3d_grid
 
    ! Create a 2D rho-grid (typical for ocean models)
    function create_rho_grid_2d(nx, ny) result(rho_grid)

@@ -1,10 +1,14 @@
 #!/usr/bin/env python3
 """
-Verification script for MIAOU
+Enhanced verification script for MIAOU
 This script:
-1. Reproduces the calculations from the main_test_output.F90 program
+1. Reproduces the calculations from the main_test_output_enhanced.F90 program
 2. Reads the namelist configuration to determine which variables to write
 3. Compares calculated values with the content of generated NetCDF files
+4. Supports 0D (scalar), 1D, 2D, and 3D variables
+5. Displays errors in red and success in green
+6. Provides a summary of errors at the end
+7. Skips checking for t=0 in avg and rst files (since these are not written)
 
 Using xarray for improved compatibility across platforms.
 """
@@ -16,12 +20,30 @@ import xarray as xr
 import matplotlib.pyplot as plt
 from datetime import datetime
 
-# Simulation parameters (identical to those in main_test_output.F90)
+# ANSI color codes for terminal output
+class Colors:
+    HEADER = '\033[95m'
+    BLUE = '\033[94m'
+    GREEN = '\033[92m'
+    YELLOW = '\033[93m'
+    RED = '\033[91m'
+    ENDC = '\033[0m'
+    BOLD = '\033[1m'
+    UNDERLINE = '\033[4m'
+    
+def color_print(message, color):
+    """Print a message with color"""
+    print(f"{color}{message}{Colors.ENDC}")
+
+# Simulation parameters (identical to those in main_test_output_enhanced.F90)
 NX = 10
 NY = 8 
 NZ = 5
 NT = 10
 DT = 1800.0  # seconds - time step
+
+# Global error tracking
+error_summary = []
 
 def parse_namelist(filename="output_config.nml"):
     """Parse the namelist file to extract output configuration"""
@@ -32,7 +54,7 @@ def parse_namelist(filename="output_config.nml"):
     }
     
     if not os.path.exists(filename):
-        print(f"ERROR: File {filename} not found!")
+        color_print(f"ERROR: File {filename} not found!", Colors.RED)
         return config
     
     # Read the file
@@ -80,13 +102,15 @@ def parse_namelist(filename="output_config.nml"):
     return config
 
 def simulate_calculations():
-    """Reproduces the analytical calculations performed in main_test_output.F90"""
+    """Reproduces the analytical calculations performed in main_test_output_enhanced.F90"""
     
-    # Initialize arrays
-    zeta = np.zeros((NX, NY))
-    temp = np.zeros((NX, NY, NZ))
-    u = np.zeros((NX, NY))
-    v = np.zeros((NX, NY))
+    # Initialize arrays for different dimensions
+    zeta = np.zeros((NX, NY))           # 2D
+    temp = np.zeros((NX, NY, NZ))       # 3D
+    u = np.zeros((NX, NY))              # 2D
+    v = np.zeros((NX, NY))              # 2D
+    wind_speed = 0.0                    # 0D (scalar)
+    temp_profile = np.zeros(NZ)         # 1D
     
     # Array to store results at each time step
     results = {
@@ -94,26 +118,32 @@ def simulate_calculations():
         'zeta': [],
         'temp': [],
         'u': [],
-        'v': []
+        'v': [],
+        'wind_speed': [],
+        'temp_profile': []
     }
     
     # Time loop
     for t in range(1, NT+1):
-        # Time in seconds
-        current_time = (t - 1) * DT
+        # Time in seconds - MODIFIÉ pour correspondre au code Fortran
+        current_time = t * DT   # Au lieu de (t-1) * DT
         
-        # Update values (as in main_test_output.F90)
-        zeta += 0.1 * t
-        temp[:, :, 0] += 0.2 * t
-        u[:] = t
-        v[:] = t * 0.5
+        # Update values (as in main_test_output_enhanced.F90)
+        zeta = zeta + 0.1 * t           # 2D field
+        temp = temp + 0.2 * t           # 3D field
+        u[:] = t                        # 2D field
+        v[:] = t * 0.5                  # 2D field
+        wind_speed = 5.0 + 0.1 * t      # 0D scalar
+        temp_profile = temp_profile + 0.5 * t  # 1D profile
         
         # Store results
         results['time'].append(current_time)
         results['zeta'].append(zeta.copy())
-        results['temp'].append(temp[:, :, 0].copy())
+        results['temp'].append(temp.copy())
         results['u'].append(u.copy())
         results['v'].append(v.copy())
+        results['wind_speed'].append(wind_speed)
+        results['temp_profile'].append(temp_profile.copy())
     
     return results
 
@@ -127,44 +157,107 @@ def find_netcdf_files():
     
     return nc_files
 
+def extract_file_info(filename):
+    """Extracts base information from filename without using config"""
+    info = {
+        'prefix': None,
+        'type': None,
+        'freq': None
+    }
+    
+    # Try to match the expected pattern: prefix_type_freqs.nc or prefix_type.nc
+    pattern1 = r'(.+)_(his|avg|rst)_(\d+)s\.nc$'
+    pattern2 = r'(.+)_(his|avg|rst)\.nc$'
+    
+    match1 = re.match(pattern1, filename)
+    match2 = re.match(pattern2, filename)
+    
+    if match1:
+        info['prefix'] = match1.group(1)
+        info['type'] = match1.group(2)
+        info['freq'] = int(match1.group(3))
+    elif match2:
+        info['prefix'] = match2.group(1)
+        info['type'] = match2.group(2)
+        info['freq'] = -1
+    else:
+        # Fallback using partial detection
+        if "_his_" in filename:
+            info['type'] = "his"
+        elif "_avg_" in filename:
+            info['type'] = "avg"
+        elif "_rst_" in filename:
+            info['type'] = "rst"
+            
+        freq_match = re.search(r'_(\d+)s\.nc$', filename)
+        if freq_match:
+            info['freq'] = int(freq_match.group(1))
+    
+    return info
+
+def should_variable_be_in_file(var_config, file_info, config):
+    """Determines if a variable should be in a file based on namelist config"""
+    # 1. Check file type compatibility
+    if file_info['type'] == 'his' and not var_config['wrt']:
+        return False
+    elif file_info['type'] == 'avg' and not var_config['avg']:
+        return False
+    elif file_info['type'] == 'rst' and not var_config['rst']:
+        return False
+    
+    # 2. Check frequency compatibility
+    if file_info['type'] == 'his' and var_config['freq_his'] > 0:
+        if abs(var_config['freq_his'] - file_info['freq']) > 1e-5:
+            return False
+    elif file_info['type'] == 'avg' and var_config['freq_avg'] > 0:
+        if abs(var_config['freq_avg'] - file_info['freq']) > 1e-5:
+            return False
+    elif file_info['type'] == 'rst' and var_config['freq_rst'] > 0:
+        if abs(var_config['freq_rst'] - file_info['freq']) > 1e-5:
+            return False
+    
+    # 3. Check prefix compatibility
+    file_prefix = file_info['prefix']
+    if var_config['prefix'] == "":  # Variable uses global prefix
+        # Check if file uses the appropriate global prefix
+        expected_prefix = None
+        if file_info['type'] == 'his':
+            expected_prefix = config['global'].get('his_prefix', 'history')
+        elif file_info['type'] == 'avg':
+            expected_prefix = config['global'].get('avg_prefix', 'average')
+        elif file_info['type'] == 'rst':
+            expected_prefix = config['global'].get('rst_prefix', 'restart')
+            
+        return file_prefix == expected_prefix
+    else:  # Variable has its own prefix
+        return file_prefix == var_config['prefix']
+
 def check_file_content(filename, config, calc_results):
     """Checks the content of a NetCDF file against analytical calculations"""
     
-    print(f"\nVerifying file: {filename}")
+    color_print(f"\nVerifying file: {filename}", Colors.BLUE)
+    file_has_errors = False
     
-    # Determine file type (his, avg, rst)
-    file_type = None
-    var_prefix = None
-    freq = None
+    # Extract file information directly from filename
+    file_info = extract_file_info(filename)
     
-    if "_his_" in filename:
-        file_type = "his"
-    elif "_avg_" in filename:
-        file_type = "avg"
-    elif "_rst_" in filename:
-        file_type = "rst"
-    
-    # Extract frequency from filename
-    freq_match = re.search(r'_(\d+)s\.nc$', filename)
-    if freq_match:
-        freq = int(freq_match.group(1))
-    
-    # Determine if this is a file with specific prefix
-    for var in config['variables']:
-        if var['prefix'] and filename.startswith(var['prefix']):
-            var_prefix = var['prefix']
-            break
+    # Display file identification info
+    print(f"  File identification:")
+    print(f"  - Type: {file_info['type']}")
+    print(f"  - Prefix: {file_info['prefix']}")
+    print(f"  - Frequency: {file_info['freq']}s")
     
     # Open NetCDF file using xarray
     try:
         # Open with decode_times=False to keep time as numbers
         nc = xr.open_dataset(filename, decode_times=False)
     except Exception as e:
-        print(f"ERROR: Cannot open {filename}: {e}")
+        error_msg = f"ERROR: Cannot open {filename}: {e}"
+        color_print(error_msg, Colors.RED)
+        error_summary.append(f"File error: {filename} - {e}")
         return
     
     # Display general information
-    print(f"  Type: {file_type}, Frequency: {freq}s, Prefix: {var_prefix or 'global'}")
     print(f"  Dimensions: {list(nc.dims.keys())}")
     print(f"  Variables: {list(nc.data_vars.keys())}")
     
@@ -174,126 +267,252 @@ def check_file_content(filename, config, calc_results):
         # Convert to float if needed (in case it's still in a different format)
         time_points = time_points.astype(float)
     else:
-        print("  WARNING: No time dimension found in file")
+        error_msg = "  WARNING: No time dimension found in file"
+        color_print(error_msg, Colors.YELLOW)
         nc.close()
         return
     
+    # Map variable names from namelist to actual variable names in file
+    var_name_map = {
+        'zeta': 'zeta',
+        'temp': 'temp',
+        'u': 'u',
+        'v': 'v',
+        'wind': 'wind_speed',
+        'profile': 'temp_profile'
+    }
+    
     # Check each variable in the file
     for var_name in nc.data_vars:
+        if var_name == 'time':
+            continue  # Skip time variable
+            
+        var_has_errors = False
         print(f"\n  Checking variable: {var_name}")
         
         # Find configuration information for this variable
         var_config = None
         for var in config['variables']:
-            if var['name'] == var_name:
+            # Check both direct and mapped names
+            if var['name'] == var_name or (var_name_map.get(var['name']) == var_name):
                 var_config = var
                 break
         
         if var_config is None:
-            print(f"    WARNING: Variable {var_name} not found in configuration!")
+            warning_msg = f"    WARNING: Variable {var_name} not found in configuration!"
+            color_print(warning_msg, Colors.YELLOW)
             continue
         
-        # Check if this variable should be in this file
-        should_be_in_file = False
-        
-        if file_type == "his" and var_config['wrt']:
-            if var_config['freq_his'] > 0 and abs(var_config['freq_his'] - freq) < 1e-5:
-                should_be_in_file = True
-        elif file_type == "avg" and var_config['avg']:
-            if var_config['freq_avg'] > 0 and abs(var_config['freq_avg'] - freq) < 1e-5:
-                should_be_in_file = True
-        elif file_type == "rst" and var_config['rst']:
-            if var_config['freq_rst'] > 0 and abs(var_config['freq_rst'] - freq) < 1e-5:
-                should_be_in_file = True
-        
-        # Check prefix
-        if var_prefix and var_config['prefix'] != var_prefix:
-            should_be_in_file = False
-        elif not var_prefix and var_config['prefix']:
-            should_be_in_file = False
-        
-        if not should_be_in_file:
-            print(f"    ERROR: Variable {var_name} should NOT be in this file!")
+        # Check if variable should be in this file
+        if not should_variable_be_in_file(var_config, file_info, config):
+            error_msg = f"    ERROR: Variable {var_name} should NOT be in this file!"
+            color_print(error_msg, Colors.RED)
+            var_has_errors = True
+            file_has_errors = True
+            error_summary.append(f"File placement error: {var_name} in {filename} shouldn't be there")
+            
+            # Print expected file information for debugging
+            if var_config['prefix'] == "":
+                prefix_type = "global"
+                if file_info['type'] == 'his':
+                    expected_prefix = config['global'].get('his_prefix', 'history')
+                elif file_info['type'] == 'avg':
+                    expected_prefix = config['global'].get('avg_prefix', 'average')
+                elif file_info['type'] == 'rst':
+                    expected_prefix = config['global'].get('rst_prefix', 'restart')
+            else:
+                prefix_type = "specific"
+                expected_prefix = var_config['prefix']
+                
+            print(f"    Expected prefix: {expected_prefix} ({prefix_type})")
+            print(f"    File prefix: {file_info['prefix']}")
+            
+            if file_info['type'] == 'his':
+                print(f"    Expected frequency: {var_config['freq_his']}")
+            elif file_info['type'] == 'avg':
+                print(f"    Expected frequency: {var_config['freq_avg']}")
+            elif file_info['type'] == 'rst':
+                print(f"    Expected frequency: {var_config['freq_rst']}")
+            print(f"    File frequency: {file_info['freq']}")
+            
             continue
         
         # Read data
         var_data = nc[var_name].values
         
-        # Compare with analytical calculations
+        # Map variable name to results key
+        result_key = var_name
+        for k, v in var_name_map.items():
+            if v == var_name:
+                result_key = v
+                break
+        
+        # Handle comparison by dimension
+        value_errors = 0
         for i, time_value in enumerate(time_points):
-            # Now time_value should be a float we can compare directly
+            # Skip t=0 for avg and rst files as per the new requirements
+            if abs(time_value) < 1e-5 and file_info['type'] in ['avg', 'rst']:
+                warning_msg = f"    WARNING: Found t=0 in {file_info['type']} file! This step should be skipped."
+                color_print(warning_msg, Colors.YELLOW)
+                error_summary.append(f"Time step error: t=0 found in {file_info['type']} file {filename}")
+                continue
+                
             time_idx = np.argmin(np.abs(np.array(calc_results['time']) - time_value))
             
-            # Calculate difference
-            # With:
-            if var_name == 'zeta':
-                expected = calc_results['zeta'][time_idx].transpose()  # Transpose to match file format
-            elif var_name == 'temp':
-                expected = calc_results['temp'][time_idx].transpose()  # Transpose to match file format
-            elif var_name == 'u':
-                expected = calc_results['u'][time_idx].transpose()  # Transpose to match file format
-            elif var_name == 'v':
-                expected = calc_results['v'][time_idx].transpose()  # Transpose to match file format
+            # Determine dimensionality and prepare expected values
+            ndim = len(var_data.shape) - 1  # Subtract 1 for time dimension
+            
+            if ndim == 0:  # 0D (scalar)
+                expected = calc_results[result_key][time_idx]
+                actual = var_data[i]
+                
+            elif ndim == 1:  # 1D
+                expected = calc_results[result_key][time_idx]
+                actual = var_data[i]
+                
+            elif ndim == 2:  # 2D
+                expected = calc_results[result_key][time_idx]
+                actual = var_data[i]
+                
+            elif ndim == 3:  # 3D
+                expected = calc_results[result_key][time_idx]
+                actual = var_data[i]
             else:
-                print(f"    WARNING: No analytical value for {var_name}")
+                warning_msg = f"    WARNING: Unexpected dimensionality {ndim} for {var_name}"
+                color_print(warning_msg, Colors.YELLOW)
                 continue
             
-            actual = var_data[i]
+            # For averages, we need to calculate the expected average
+            # Pour les fichiers de moyenne (avg), remplacer le bloc de calcul des moyennes par ce code :
+            if file_info['type'] == "avg":
+                if file_info['freq'] > 0:
+                    # Nombre de pas de temps par intervalle de moyenne
+                    steps_per_avg = int(file_info['freq'] / DT)
+                    
+                    # Déterminer quel "paquet" de points ce temps représente
+                    current_interval = int(time_value / file_info['freq'])
+                    
+                    # Indices de début et fin pour la moyenne
+                    # Le début est juste après le dernier temps d'écriture
+                    # La fin est le temps actuel (qui est un temps d'écriture)
+                    avg_start_time = (current_interval - 1) * file_info['freq']
+                    avg_end_time = current_interval * file_info['freq']
+                    
+                    # Trouver les indices correspondants dans nos données calculées
+                    # Nous cherchons tous les points dont le temps est > avg_start_time et <= avg_end_time
+                    avg_indices = []
+                    for j in range(len(calc_results['time'])):
+                        t = calc_results['time'][j]
+                        if t > avg_start_time and t <= avg_end_time:
+                            avg_indices.append(j)
+                    
+                    # Si aucun point n'est trouvé, utilisez une approche alternative
+                    if not avg_indices:
+                        # Prendre simplement les N derniers points jusqu'au temps actuel
+                        time_idx = np.argmin(np.abs(np.array(calc_results['time']) - time_value))
+                        avg_indices = list(range(max(0, time_idx - steps_per_avg + 1), time_idx + 1))
+                    
+                    # Calculer la moyenne en fonction de la dimension
+                    if ndim == 0:  # Scalar
+                        avg_sum = 0.0
+                        for idx in avg_indices:
+                            avg_sum += calc_results[result_key][idx]
+                        expected = avg_sum / len(avg_indices)
+                        
+                    elif ndim == 1:  # 1D
+                        avg_sum = np.zeros_like(expected)
+                        for idx in avg_indices:
+                            avg_sum += calc_results[result_key][idx]
+                        expected = avg_sum / len(avg_indices)
+                        
+                    elif ndim == 2:  # 2D
+                        avg_sum = np.zeros_like(expected)
+                        for idx in avg_indices:
+                            avg_sum += calc_results[result_key][idx]
+                        expected = avg_sum / len(avg_indices)
+                        
+                    elif ndim == 3:  # 3D
+                        avg_sum = np.zeros_like(expected)
+                        for idx in avg_indices:
+                            avg_sum += calc_results[result_key][idx]
+                        expected = avg_sum / len(avg_indices)
             
-            # For averages, calculate expected average value
-            if file_type == "avg":
-                # Find time steps that contribute to this average
-                steps_in_avg = 0
-                sum_values = np.zeros_like(expected)
+            # Calculate error
+            if ndim == 0:  # 0D (scalar)
+                if abs(expected) < 1e-10:
+                    rel_error = abs(actual - expected)
+                else:
+                    rel_error = abs((actual - expected) / expected)
                 
-                for j in range(time_idx + 1):
-                    if j == 0 or (calc_results['time'][j] % freq) < 1e-5:
-                        steps_in_avg += 1
-                        if var_name == 'zeta':
-                            sum_values += calc_results['zeta'][j].transpose()  # Transpose to match file format
-                        elif var_name == 'temp':
-                            sum_values += calc_results['temp'][j].transpose()  # Transpose to match file format
-                        elif var_name == 'u':
-                            sum_values += calc_results['u'][j].transpose()  # Transpose to match file format
-                        elif var_name == 'v':
-                            sum_values += calc_results['v'][j].transpose()  # Transpose to match file format
+                max_error = rel_error
                 
-                if steps_in_avg > 0:
-                    expected = sum_values / steps_in_avg
+                if max_error > 1e-5:
+                    error_msg = f"    ERROR at t={time_value}: Error = {max_error:.6f}"
+                    color_print(error_msg, Colors.RED)
+                    print(f"      Expected: {expected}, Actual: {actual}")
+                    value_errors += 1
+                    var_has_errors = True
+                    file_has_errors = True
+                else:
+                    success_msg = f"    OK at t={time_value}: Error = {max_error:.6f}"
+                    color_print(success_msg, Colors.GREEN)
             
-            # Calculate relative error
-            if np.all(np.abs(expected) < 1e-10):
-                rel_error = np.abs(actual - expected)
-            else:
-                rel_error = np.abs((actual - expected) / expected)
-            
-            max_error = np.max(rel_error)
-            
-            if max_error > 1e-5:
-                print(f"    ERROR at t={time_value}: Max error = {max_error:.6f}")
-                # Display sample values for debugging
-                print(f"      Expected[0,0]: {expected[0,0]}, Actual[0,0]: {actual[0,0]}")
-            else:
-                print(f"    OK at t={time_value}: Max error = {max_error:.6f}")
+            else:  # 1D, 2D, 3D
+                # Flatten arrays for comparison
+                expected_flat = expected.flatten()
+                actual_flat = actual.flatten()
+                
+                # Calculate relative error
+                with np.errstate(divide='ignore', invalid='ignore'):
+                    rel_error = np.abs((actual_flat - expected_flat) / np.maximum(1e-10, np.abs(expected_flat)))
+                    # Replace NaN or inf values with absolute error
+                    rel_error = np.where(np.isnan(rel_error) | np.isinf(rel_error), 
+                                         np.abs(actual_flat - expected_flat), rel_error)
+                
+                max_error = np.max(rel_error)
+                
+                if max_error > 1e-5:
+                    error_msg = f"    ERROR at t={time_value}: Max error = {max_error:.6f}"
+                    color_print(error_msg, Colors.RED)
+                    # Find location of maximum error
+                    max_error_idx = np.argmax(rel_error)
+                    print(f"      Expected[{max_error_idx}]: {expected_flat[max_error_idx]}, "
+                          f"Actual[{max_error_idx}]: {actual_flat[max_error_idx]}")
+                    value_errors += 1
+                    var_has_errors = True
+                    file_has_errors = True
+                else:
+                    success_msg = f"    OK at t={time_value}: Max error = {max_error:.6f}"
+                    color_print(success_msg, Colors.GREEN)
+        
+        # Add summary for this variable if it had errors
+        if var_has_errors and value_errors > 0:
+            error_summary.append(f"Value error: {var_name} in {filename} has {value_errors} incorrect values")
     
     nc.close()
+    
+    # Final status for this file
+    if file_has_errors:
+        color_print(f"\n  ❌ File {filename} has errors", Colors.RED)
+    else:
+        color_print(f"\n  ✅ File {filename} is correct", Colors.GREEN)
 
 def plot_results(filename, variable, time_index=None):
     """Creates a plot to visualize the results"""
     
     if not os.path.exists(filename):
-        print(f"ERROR: File {filename} not found!")
+        color_print(f"ERROR: File {filename} not found!", Colors.RED)
         return
     
     try:
         # Open file with xarray, disable time decoding
         nc = xr.open_dataset(filename, decode_times=False)
     except Exception as e:
-        print(f"ERROR: Cannot open {filename}: {e}")
+        color_print(f"ERROR: Cannot open {filename}: {e}", Colors.RED)
         return
     
     if variable not in nc.data_vars:
-        print(f"ERROR: Variable {variable} not found in {filename}!")
+        color_print(f"ERROR: Variable {variable} not found in {filename}!", Colors.RED)
         nc.close()
         return
     
@@ -309,29 +528,84 @@ def plot_results(filename, variable, time_index=None):
     
     plt.figure(figsize=(10, 8))
     
+    # Determine dimensionality
+    ndim = len(data.shape) - 1  # Subtract 1 for time dimension
+    
     if time_index is not None and time_index < len(time):
-        plt.pcolormesh(data[time_index], shading='auto')
+        if ndim == 0:  # 0D (scalar)
+            # Create a line plot of scalar value over time
+            plt.plot(time, data, marker='o')
+            plt.xlabel('Time (seconds)')
+            
+            # Get units from xarray if available
+            units = nc[variable].attrs.get('units', '')
+            plt.ylabel(f'{variable} ({units})')
+            
+            plt.title(f'Evolution of scalar {variable} in {os.path.basename(filename)}')
+            
+        elif ndim == 1:  # 1D
+            # Line plot for 1D data
+            plt.plot(np.arange(data.shape[1]), data[time_index])
+            plt.xlabel('Index')
+            
+            # Get units from xarray if available
+            units = nc[variable].attrs.get('units', '')
+            plt.ylabel(f'{variable} ({units})')
+            
+            # Format time value for title
+            time_str = f"{float(time[time_index]):.1f}s"
+            plt.title(f'{variable} profile at t={time_str} in {os.path.basename(filename)}')
+            
+        elif ndim == 2:  # 2D
+            plt.pcolormesh(data[time_index], shading='auto')
+            
+            # Get units from xarray if available
+            units = nc[variable].attrs.get('units', '')
+            plt.colorbar(label=f'{variable} ({units})')
+            
+            # Format time value for title
+            time_str = f"{float(time[time_index]):.1f}s"
+            plt.title(f'{variable} at t={time_str} in {os.path.basename(filename)}')
+            
+        elif ndim == 3:  # 3D
+            # Show middle slice of 3D field
+            mid_slice = data.shape[2] // 2
+            plt.pcolormesh(data[time_index, :, :, mid_slice], shading='auto')
+            
+            # Get units from xarray if available
+            units = nc[variable].attrs.get('units', '')
+            plt.colorbar(label=f'{variable} ({units})')
+            
+            # Format time value for title
+            time_str = f"{float(time[time_index]):.1f}s"
+            plt.title(f'{variable} (middle slice) at t={time_str} in {os.path.basename(filename)}')
+    else:
+        # Plot time evolution at a central point
+        if ndim == 0:  # 0D (scalar)
+            plt.plot(time, data, marker='o')
+            plt.xlabel('Time (seconds)')
+            
+        elif ndim == 1:  # 1D
+            mid_x = data.shape[1] // 2
+            plt.plot(time, data[:, mid_x])
+            plt.xlabel('Time (seconds)')
+            
+        elif ndim == 2:  # 2D
+            mid_x = data.shape[1] // 2
+            mid_y = data.shape[2] // 2
+            plt.plot(time, data[:, mid_x, mid_y])
+            plt.xlabel('Time (seconds)')
+            
+        elif ndim == 3:  # 3D
+            mid_x = data.shape[1] // 2
+            mid_y = data.shape[2] // 2
+            mid_z = data.shape[3] // 2
+            plt.plot(time, data[:, mid_x, mid_y, mid_z])
+            plt.xlabel('Time (seconds)')
         
         # Get units from xarray if available
         units = nc[variable].attrs.get('units', '')
-        plt.colorbar(label=f'{variable} ({units})')
-        
-        # Format time value for title
-        time_str = f"{float(time[time_index]):.1f}s"
-            
-        plt.title(f'{variable} at t={time_str} in {os.path.basename(filename)}')
-    else:
-        # Plot time evolution at a central point
-        mid_x = data.shape[1] // 2
-        mid_y = data.shape[2] // 2 if len(data.shape) > 2 else data.shape[1] // 2
-        
-        if len(data.shape) > 2:
-            plt.plot(time, data[:, mid_x, mid_y])
-        else:
-            plt.plot(time, data[:, mid_x])
-            
-        plt.xlabel('Time (s)')
-        plt.ylabel(f'{variable} ({nc[variable].attrs.get("units", "")})')
+        plt.ylabel(f'{variable} ({units})')
         plt.title(f'Evolution of {variable} at central point in {os.path.basename(filename)}')
     
     plt.tight_layout()
@@ -351,15 +625,28 @@ def plot_results(filename, variable, time_index=None):
     nc.close()
 
 def main():
-    print("Verification script for MIAOU")
-    print("================================")
+    # Reset error summary for each run
+    global error_summary
+    error_summary = []
+    
+    color_print("Enhanced verification script for MIAOU", Colors.HEADER + Colors.BOLD)
+    color_print("=====================================", Colors.HEADER)
+    
+    # Parse command line arguments
+    import argparse
+    parser = argparse.ArgumentParser(description='Verify output of MIAOU.')
+    parser.add_argument('--create-plots', action='store_true', 
+                      help='Create plots of the variables (disabled by default)')
+    parser.add_argument('--namelist', default='output_config.nml',
+                      help='Path to the namelist file (default: output_config.nml)')
+    args = parser.parse_args()
     
     # Step 1: Analyze configuration
     print("\nAnalyzing configuration...")
-    config = parse_namelist()
+    config = parse_namelist(args.namelist)
     
     if not config['variables']:
-        print("ERROR: No variables found in configuration!")
+        color_print("ERROR: No variables found in configuration!", Colors.RED)
         return
     
     print(f"Global prefixes: {config['global']}")
@@ -375,7 +662,7 @@ def main():
     nc_files = find_netcdf_files()
     
     if not nc_files:
-        print("ERROR: No NetCDF files found!")
+        color_print("ERROR: No NetCDF files found!", Colors.RED)
         return
     
     print(f"Files found: {nc_files}")
@@ -384,19 +671,27 @@ def main():
     for filename in nc_files:
         check_file_content(filename, config, calc_results)
     
-    # Step 5: Create some plots
-#    print("\nCreating plots...")
-#    for filename in nc_files:
-#        for var in ['zeta', 'temp', 'u', 'v']:
-#            try:
-#                # Quick check if variable exists in file
-#                with xr.open_dataset(filename) as ds:
-#                    if var in ds.data_vars:
-#                        plot_results(filename, var)
-#            except:
-#                pass
+    # Step 5: Create plots (only if --create-plots flag is specified)
+    if args.create_plots:
+        print("\nCreating plots...")
+        for filename in nc_files:
+            try:
+                # Open the file to check which variables it contains
+                with xr.open_dataset(filename) as ds:
+                    for var in ds.data_vars:
+                        if var != 'time':  # Skip time variable
+                            plot_results(filename, var)
+            except Exception as e:
+                color_print(f"Error creating plots for {filename}: {e}", Colors.RED)
     
-    print("\nVerification complete!")
+    # Final summary
+    if error_summary:
+        color_print("\n===== ERROR SUMMARY =====", Colors.RED + Colors.BOLD)
+        for i, error in enumerate(error_summary, 1):
+            color_print(f"{i}. {error}", Colors.RED)
+        color_print(f"\n❌ Verification completed with {len(error_summary)} errors", Colors.RED + Colors.BOLD)
+    else:
+        color_print("\n✅ Verification completed successfully! All files and values are correct.", Colors.GREEN + Colors.BOLD)
 
 if __name__ == "__main__":
     main()

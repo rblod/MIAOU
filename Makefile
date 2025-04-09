@@ -6,7 +6,7 @@ FC = gfortran
 FFLAGS = -O0 -g  -Wall -fcheck=all -fbacktrace -I$(NCDF_INC)
 LDFLAGS = -g -L$(NCDF_LIB) -lnetcdff -lnetcdf
 
-OBJS =  ocean_var.o namelist_output.o grid_module.o file_manager.o variables_registry.o main_test_output.o
+OBJS =  ocean_var.o namelist_output.o grid_module.o netcdf_backend.o file_manager.o variables_registry.o main_test_output.o
 
 all: test_output.exe
 
@@ -17,4 +17,4 @@ test_output.exe: $(OBJS)
 	$(FC) -o $@ $(OBJS) $(LDFLAGS)
 
 clean:
-	rm -f *.o *.mod test_output.exe
+	rm -f *.nc *.o *.mod test_output.exe
