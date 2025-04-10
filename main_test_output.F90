@@ -61,10 +61,10 @@ program main_test_output_enhanced
          call write_all_outputs(current_time, .false.)
       end if
    end do
-   print *, 'nt final ', nt, current_time
+  ! print *, 'nt final ', nt, current_time
    
    ! Finalize outputs
-   call close_all_output_files()
+   call finalize_output()
    
    ! Deallocate memory
    deallocate(zeta, temp, u, v, temp_profile)

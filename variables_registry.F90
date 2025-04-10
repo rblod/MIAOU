@@ -72,6 +72,9 @@ contains
             !call set_variable_filenames(var_zeta)
             
             ! Register the variable
+            print *
+            print *, 'CALL REGISTRED_VARIABLE FOR ', var_zeta%name
+            print *
             call register_variable(var_zeta)
             
          !-------------------------!
@@ -97,6 +100,9 @@ contains
             !call set_variable_filenames(var_t)
             
             ! Register the variable
+            print *
+            print *, 'CALL REGISTRED_VARIABLE FOR ', var_t%name
+            print *
             call register_variable(var_t)
             
          !-------------------------!
@@ -121,6 +127,9 @@ contains
             !call set_variable_filenames(var_u)
             
             ! Register the variable
+            print *
+            print *, 'CALL REGISTRED_VARIABLE FOR ', var_u%name
+            print *
             call register_variable(var_u)
             
          !-------------------------!
@@ -138,14 +147,17 @@ contains
             nullify(var_v%data_2d)
             var_v%data_2d => v
 
-         ! Copie générique des paramètres
-         call copy_namelist_config(dyn_vars(i), var_v)
+            ! Copie générique des paramètres
+            call copy_namelist_config(dyn_vars(i), var_v)
          
-         ! Générer automatiquement les noms de fichiers
-         !call set_variable_filenames(var_v)
+            ! Générer automatiquement les noms de fichiers
+            !call set_variable_filenames(var_v)
             
-         ! Register the variable
-         call register_variable(var_v)
+            ! Register the variable
+            print *
+            print *, 'CALL REGISTRED_VARIABLE FOR ', var_v%name
+            print *
+            call register_variable(var_v) 
             
          !-------------------------!
          ! 0D variable (new)
@@ -168,6 +180,9 @@ contains
             !call set_variable_filenames(var_wind_speed)
             
             ! Register the variable
+            print *
+            print *, 'CALL REGISTRED_VARIABLE FOR ', var_wind_speed%name
+            print *
             call register_variable(var_wind_speed)
             
          !-------------------------!
@@ -191,10 +206,16 @@ contains
             !call set_variable_filenames(var_profile)
             
             ! Register the variable
+            print *
+            print *, 'CALL REGISTRED_VARIABLE FOR ', var_profile%name
+            print *
             call register_variable(var_profile)
          end select
 
       end do
+
+      if (allocated(dyn_vars)) deallocate(dyn_vars)
+
    end subroutine init_variables
 
    ! subroutine set_variable_filenames(var)

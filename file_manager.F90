@@ -10,7 +10,7 @@ module file_manager
    implicit none
    
    public :: register_variable, define_output_file, write_output, generate_filename
-   public :: initialize_output_files, close_all_output_files, write_all_outputs
+   public :: initialize_output_files, finalize_output, write_all_outputs
    
    ! Enhanced nc_var type supporting multiple dimensions
    type :: nc_var
@@ -50,6 +50,16 @@ module file_manager
       real :: freq_avg = -1.        ! Frequency for average
       real :: freq_rst = -1.        ! Frequency for restart
       character(len=128) :: file_prefix = ""
+
+         ! Ajout pour la gestion de mémoire
+      logical :: owns_avg_buffers = .false.  ! Indique si cette instance gère ses tampons
+         
+         ! Méthodes supplémentaires
+      contains
+         procedure :: allocate_buffers    ! Allouer les tampons si nécessaire
+         procedure :: deallocate_buffers  ! Libérer les tampons si propriétaire
+         procedure :: reset_avg_buffers   ! Réinitialiser les tampons sans désallouer
+
    end type nc_var
    
    ! Structure for open files
@@ -217,8 +227,205 @@ contains
    ! Variable registration
    !---------------------------------------------------------------------------
    
-   ! Register a variable for output
+   ! Améliorer l'ajout de variables avec préallocation
    subroutine register_variable(v)
+      type(nc_var), intent(in) :: v
+      type(nc_var), allocatable :: tmp(:)
+      integer :: i, n, new_size, var_index
+      
+      if (.not. allocated(registered_vars)) then
+         ! Allocation initiale avec espace supplémentaire
+         allocate(registered_vars(10))  ! Préallouer pour 10 variables
+         registered_vars(1) = v
+         
+         ! Associer le pointeur approprié
+         call associate_variable_data(registered_vars(1), v)
+         
+         ! Définir explicitement l'indice de la variable ajoutée
+         var_index = 1
+         
+         ! Marquer les autres éléments comme non utilisés
+         do i = 2, 10
+            registered_vars(i)%name = ""  ! Marquer comme non utilisé
+         end do
+      else
+         ! Trouver un emplacement libre ou étendre le tableau
+         n = size(registered_vars)
+         var_index = -1  ! Initialiser à une valeur invalide
+         
+         ! Chercher un emplacement libre
+         do i = 1, n
+            if (trim(registered_vars(i)%name) == "") then
+               registered_vars(i) = v
+               call associate_variable_data(registered_vars(i), v)
+               
+               ! Mémoriser l'indice de la variable ajoutée
+               var_index = i
+               
+               print *
+               print *, 'FOUND EMPTY SLOT AT INDEX ', var_index, ' FOR ', v%name
+               print *
+               exit  ! Sortir de la boucle mais continuer l'exécution
+            end if
+         end do
+         
+         ! Si aucun emplacement libre n'a été trouvé
+         if (var_index == -1) then
+            ! Aucun emplacement libre, agrandir le tableau
+            new_size = n + max(n/2, 10)  ! Stratégie de croissance géométrique
+            allocate(tmp(new_size))
+            tmp(1:n) = registered_vars
+            tmp(n+1) = v
+            
+            ! Marquer les nouveaux éléments comme non utilisés
+            do i = n+2, new_size
+               tmp(i)%name = ""
+            end do
+            
+            call move_alloc(tmp, registered_vars)
+            call associate_variable_data(registered_vars(n+1), v)
+            
+            ! Définir l'indice de la variable ajoutée
+            var_index = n+1
+         end if
+      end if
+
+      ! Vérifier que l'indice est valide avant d'appeler allocate_buffers
+      if (var_index > 0 .and. var_index <= size(registered_vars)) then
+         print *, 'ALLOCATING BUFFERS FOR VAR AT INDEX ', var_index, ': ', registered_vars(var_index)%name
+         call registered_vars(var_index)%allocate_buffers()
+      else
+         print *, 'ERROR: Invalid variable index ', var_index, ' for ', v%name
+      end if
+
+      print *
+      print *, 'SUBROUTINE REGISTRED_VARIABLE_COMPLETED FOR ', v%name
+      print *
+      
+   end subroutine register_variable
+
+   ! Procédure auxiliaire pour associer les données
+   subroutine associate_variable_data(target_var, source_var)
+      type(nc_var), intent(inout) :: target_var
+      type(nc_var), intent(in) :: source_var
+      
+      select case (source_var%ndims)
+      case (0)
+         if (associated(source_var%scalar)) then
+            target_var%scalar => source_var%scalar
+         end if
+      case (1)
+         if (associated(source_var%data_1d)) then
+            target_var%data_1d => source_var%data_1d
+         end if
+      case (2)
+         if (associated(source_var%data_2d)) then
+            target_var%data_2d => source_var%data_2d
+         end if
+      case (3)
+         if (associated(source_var%data_3d)) then
+            target_var%data_3d => source_var%data_3d
+         end if
+      end select
+   end subroutine associate_variable_data
+
+
+   ! Alloue les tampons de moyenne si nécessaire
+   subroutine allocate_buffers(this)
+      class(nc_var), intent(inout) :: this
+      
+      ! N'alloue que si le mode moyenne est activé
+      if (.not. this%to_avg) return
+      
+      ! Selon la dimension de la variable
+      select case (this%ndims)
+      case (0)
+         ! Pour les scalaires, juste réinitialiser la valeur
+         this%scalar_avg = 0.0
+      case (1)
+         ! Pour les données 1D
+         if (associated(this%data_1d)) then
+            if (.not. allocated(this%avg_buffer_1d)) then
+               allocate(this%avg_buffer_1d(size(this%data_1d)))
+               this%avg_buffer_1d = 0.0
+               this%owns_avg_buffers = .true.
+            end if
+         end if
+      case (2)
+         ! Pour les données 2D
+         if (associated(this%data_2d)) then
+            if (.not. allocated(this%avg_buffer_2d)) then
+               allocate(this%avg_buffer_2d(size(this%data_2d, 1), size(this%data_2d, 2)))
+               this%avg_buffer_2d = 0.0
+               this%owns_avg_buffers = .true.
+            end if
+         end if
+      case (3)
+         ! Pour les données 3D
+         if (associated(this%data_3d)) then
+            if (.not. allocated(this%avg_buffer_3d)) then
+               allocate(this%avg_buffer_3d(size(this%data_3d, 1), &
+                                         size(this%data_3d, 2), &
+                                         size(this%data_3d, 3)))
+               this%avg_buffer_3d = 0.0
+               this%owns_avg_buffers = .true.
+            end if
+         end if
+      end select
+   end subroutine allocate_buffers
+
+   ! Désalloue les tampons de moyenne si on en est propriétaire
+   subroutine deallocate_buffers(this)
+      class(nc_var), intent(inout) :: this
+      
+      ! Ne désalloue que si on est propriétaire des tampons
+      if (.not. this%owns_avg_buffers) return
+      
+      ! Selon la dimension
+      select case (this%ndims)
+      case (1)
+         if (allocated(this%avg_buffer_1d)) then
+            deallocate(this%avg_buffer_1d)
+         end if
+      case (2)
+         if (allocated(this%avg_buffer_2d)) then
+            deallocate(this%avg_buffer_2d)
+         end if
+      case (3)
+         if (allocated(this%avg_buffer_3d)) then
+            deallocate(this%avg_buffer_3d)
+         end if
+      end select
+      
+      this%owns_avg_buffers = .false.
+   end subroutine deallocate_buffers
+
+   ! Réinitialise les tampons sans désallouer
+   subroutine reset_avg_buffers(this)
+      class(nc_var), intent(inout) :: this
+      
+      ! Réinitialise selon la dimension
+      select case (this%ndims)
+      case (0)
+         this%scalar_avg = 0.0
+      case (1)
+         if (allocated(this%avg_buffer_1d)) then
+            this%avg_buffer_1d = 0.0
+         end if
+      case (2)
+         if (allocated(this%avg_buffer_2d)) then
+            this%avg_buffer_2d = 0.0
+         end if
+      case (3)
+         if (allocated(this%avg_buffer_3d)) then
+            this%avg_buffer_3d = 0.0
+         end if
+      end select
+   end subroutine reset_avg_buffers
+
+
+   ! Register a variable for output
+   subroutine register_variable_old(v)
       type(nc_var), intent(in) :: v
       type(nc_var), allocatable :: tmp(:)
       integer :: n
@@ -295,7 +502,7 @@ contains
       end if
 
       write(*,*) 'end register_variable'
-   end subroutine register_variable
+   end subroutine register_variable_old
    
    !---------------------------------------------------------------------------
    ! Variable definition
@@ -505,33 +712,18 @@ contains
                end if
             case (1)
                if (associated(registered_vars(i)%data_1d)) then
-                  if (.not. allocated(registered_vars(i)%avg_buffer_1d)) then
-                     allocate(registered_vars(i)%avg_buffer_1d(size(registered_vars(i)%data_1d)))
-                     registered_vars(i)%avg_buffer_1d = 0.0
-                  end if
                   registered_vars(i)%avg_buffer_1d = registered_vars(i)%avg_buffer_1d + &
                                                  registered_vars(i)%data_1d
                end if
             case (2)
                if (associated(registered_vars(i)%data_2d)) then
-                  if (.not. allocated(registered_vars(i)%avg_buffer_2d)) then
-                     allocate(registered_vars(i)%avg_buffer_2d( &
-                              size(registered_vars(i)%data_2d, 1), &
-                              size(registered_vars(i)%data_2d, 2)))
-                     registered_vars(i)%avg_buffer_2d = 0.0
-                  end if
+               print *, size(registered_vars(i)%avg_buffer_2d )
+               print *, size(registered_vars(i)%data_2d )
                   registered_vars(i)%avg_buffer_2d = registered_vars(i)%avg_buffer_2d + &
                                                  registered_vars(i)%data_2d
                end if
             case (3)
                if (associated(registered_vars(i)%data_3d)) then
-                  if (.not. allocated(registered_vars(i)%avg_buffer_3d)) then
-                     allocate(registered_vars(i)%avg_buffer_3d( &
-                              size(registered_vars(i)%data_3d, 1), &
-                              size(registered_vars(i)%data_3d, 2), &
-                              size(registered_vars(i)%data_3d, 3)))
-                     registered_vars(i)%avg_buffer_3d = 0.0
-                  end if
                   registered_vars(i)%avg_buffer_3d = registered_vars(i)%avg_buffer_3d + &
                                                  registered_vars(i)%data_3d
                end if
@@ -671,7 +863,7 @@ end if
                      call nc_write_variable(ncid, varid, &
                                          registered_vars(i)%scalar_avg / real(steps_since_last_write), &
                                          open_files(file_idx)%time_index)
-                     registered_vars(i)%scalar_avg = 0.0  ! Reset after writing
+                     call registered_vars(i)%reset_avg_buffers()
                   end if
                case (1)
                   if (allocated(registered_vars(i)%avg_buffer_1d)) then
@@ -679,7 +871,7 @@ end if
                         call nc_write_variable(ncid, varid, &
                                             registered_vars(i)%avg_buffer_1d / real(steps_since_last_write), &
                                             open_files(file_idx)%time_index)
-                        registered_vars(i)%avg_buffer_1d = 0.0  ! Reset after writing
+                        call registered_vars(i)%reset_avg_buffers()
                      end if
                   end if
                case (2)
@@ -688,7 +880,7 @@ end if
                         call nc_write_variable(ncid, varid, &
                                             registered_vars(i)%avg_buffer_2d / real(steps_since_last_write), &
                                             open_files(file_idx)%time_index)
-                        registered_vars(i)%avg_buffer_2d = 0.0  ! Reset after writing
+                        call registered_vars(i)%reset_avg_buffers()
                      end if
                   end if
                case (3)
@@ -697,7 +889,7 @@ end if
                         call nc_write_variable(ncid, varid, &
                                             registered_vars(i)%avg_buffer_3d / real(steps_since_last_write), &
                                             open_files(file_idx)%time_index)
-                        registered_vars(i)%avg_buffer_3d = 0.0  ! Reset after writing
+                       call registered_vars(i)%reset_avg_buffers()
                      end if
                   end if
                end select
@@ -948,6 +1140,13 @@ end if
       
       ! Free memory
       deallocate (open_files)
+
+      if (allocated(registered_vars)) then
+           do i = 1, size(registered_vars)
+              call registered_vars(i)%deallocate_buffers()
+           end do
+        end if
+
    end subroutine close_all_output_files
    
    ! Write all outputs for the current time step
@@ -983,4 +1182,49 @@ end if
          end if
       end do
    end subroutine write_all_outputs
+
+
+   subroutine cleanup_variable(var)
+      type(nc_var), intent(inout) :: var
+      
+      ! Désassocier les pointeurs
+      if (associated(var%scalar)) nullify(var%scalar)
+      if (associated(var%data_1d)) nullify(var%data_1d)
+      if (associated(var%data_2d)) nullify(var%data_2d)
+      if (associated(var%data_3d)) nullify(var%data_3d)
+      
+      ! Désallouer les tampons de moyenne
+      if (allocated(var%avg_buffer_1d)) deallocate(var%avg_buffer_1d)
+      if (allocated(var%avg_buffer_2d)) deallocate(var%avg_buffer_2d)
+      if (allocated(var%avg_buffer_3d)) deallocate(var%avg_buffer_3d)
+   end subroutine cleanup_variable
+
+   ! Ajouter une subroutine pour nettoyer toutes les variables enregistrées
+   subroutine cleanup_all_variables()
+      integer :: i
+      
+      if (allocated(registered_vars)) then
+         do i = 1, size(registered_vars)
+            call cleanup_variable(registered_vars(i))
+         end do
+         deallocate(registered_vars)
+      end if
+   end subroutine cleanup_all_variables
+
+
+   subroutine finalize_output
+      ! Fermer tous les fichiers
+      call close_all_output_files()
+      
+      ! Nettoyer toutes les variables
+      call cleanup_all_variables()
+      
+      ! Libérer toute autre mémoire allouée
+    !  if (allocated(dyn_vars)) deallocate(dyn_vars)
+      
+      ! Réinitialiser d'autres états globaux si nécessaire
+      ! ...
+   end subroutine finalize_output
+
+
 end module file_manager
