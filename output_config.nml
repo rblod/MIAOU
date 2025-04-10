@@ -1,13 +1,19 @@
 &output_global
-  his_prefix = "history"
-  avg_prefix = "average"
-  rst_prefix = "restart"
+  his_prefix = "mysimu"
+  avg_prefix = "mysimu"
+  rst_prefix = "mysimu"
+  global_freq_his = 3600.0
+  global_freq_avg = 7200.0
+  global_freq_rst = 9000.0
+  global_to_his = .false.
+  global_to_avg = .true.
+  global_to_rst = .true.
 /
 
 &output_dyn
   ! Format: "name", write_his, write_avg, write_rst, "file_prefix", freq_his, freq_avg, freq_rst
   ! 2D variables (existing)
-  dyn_vars(1) = "zeta", .true., .true., .false., "", 3600., 7200., -1.
+  dyn_vars(1) = "zeta",.true. , .true., .false., "", 3600., 7200., -1.
   dyn_vars(2) = "u",    .false., .false., .true., "u", -1., -1., 9000.
   dyn_vars(3) = "v",    .false., .false., .true., "special", -1., -1., 7200.
   ! 3D variable (full 3D now used)

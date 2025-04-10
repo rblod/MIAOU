@@ -216,22 +216,69 @@ contains
    !>
    !> @param[in]    dyn_var     Source configuration from namelist
    !> @param[inout] target_var  Target variable to configure
+   !> Copy output configuration from namelist to a variable
+   !>
+   !> @param[in]    dyn_var     Source configuration from namelist
+   !> @param[inout] target_var  Target variable to configure
    subroutine copy_namelist_config(dyn_var, target_var)
-      type(var_output_config), intent(in) :: dyn_var
-      type(nc_var), intent(inout), target :: target_var
+     use namelist_output, only: global_freq_his, global_freq_avg, global_freq_rst, &
+                               global_to_his, global_to_avg, global_to_rst
+     type(var_output_config), intent(in) :: dyn_var
+     type(nc_var), intent(inout), target :: target_var
 
-      ! Copy output flags
-      target_var%to_his = dyn_var%wrt
-      target_var%to_avg = dyn_var%avg
-      target_var%to_rst = dyn_var%rst
+     ! Copy output flags using global defaults if needed
+     target_var%to_his = dyn_var%wrt
+     target_var%to_avg = dyn_var%avg
+     target_var%to_rst = dyn_var%rst
+     
+     ! Apply global defaults for flags if not specified (value -1 indicates not specified)
+     if (.not. dyn_var%wrt .and. .not. dyn_var%avg .and. .not. dyn_var%rst) then
+       ! If all flags are false, use global defaults
+       target_var%to_his = global_to_his
+       target_var%to_avg = global_to_avg
+       target_var%to_rst = global_to_rst
+     end if
 
-      ! Copy output frequencies
-      target_var%freq_his = dyn_var%freq_his
-      target_var%freq_avg = dyn_var%freq_avg
-      target_var%freq_rst = dyn_var%freq_rst
+     ! Copy output frequencies, using global defaults if unspecified
+     ! For history files
+     if (dyn_var%freq_his > 0.0) then
+       target_var%freq_his = dyn_var%freq_his
+     else if (target_var%to_his) then
+       ! Use global default if flag is enabled
+       target_var%freq_his = global_freq_his
+     else
+       target_var%freq_his = -1.0
+     end if
 
-      ! Copy file prefix
-      target_var%file_prefix = dyn_var%file_prefix
+     ! For average files
+     if (dyn_var%freq_avg > 0.0) then
+       target_var%freq_avg = dyn_var%freq_avg
+     else if (target_var%to_avg) then
+       ! Use global default if flag is enabled
+       target_var%freq_avg = global_freq_avg
+     else
+       target_var%freq_avg = -1.0
+     end if
+
+     ! For restart files
+     if (dyn_var%freq_rst > 0.0) then
+       target_var%freq_rst = dyn_var%freq_rst
+     else if (target_var%to_rst) then
+       ! Use global default if flag is enabled
+       target_var%freq_rst = global_freq_rst
+     else
+       target_var%freq_rst = -1.0
+     end if
+
+     ! Copy file prefix
+     target_var%file_prefix = dyn_var%file_prefix
+
+      print *, "Variable: ", trim(target_var%name)
+      print *, "  His: ", target_var%to_his, " Freq: ", target_var%freq_his
+      print *, "  Avg: ", target_var%to_avg, " Freq: ", target_var%freq_avg
+      print *, "  Rst: ", target_var%to_rst, " Freq: ", target_var%freq_rst
+      print *, "  Prefix: ", trim(target_var%file_prefix)
+
    end subroutine copy_namelist_config
 
 end module variables_registry

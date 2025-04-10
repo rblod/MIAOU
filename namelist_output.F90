@@ -1,17 +1,10 @@
-!>
-!> Module to read output configuration from a namelist file
-!>
-!> This module manages the reading of output configuration from namelist files,
-!> handling both global output settings and individual variable output preferences.
-!> It supports configuration for history files, average files, and restart files.
-!>
-!> @author Rachid Benshila
-!> @date 2025-04-10
-!>
 module namelist_output
    implicit none
    private
+   ! Ajout des fréquences globales et des flags globaux
    public :: his_prefix, avg_prefix, rst_prefix, var_output_config, dyn_vars
+   public :: global_freq_his, global_freq_avg, global_freq_rst
+   public :: global_to_his, global_to_avg, global_to_rst
    public :: read_output_namelist
 
    ! Constants for error handling
@@ -30,6 +23,30 @@ module namelist_output
    !> @var rst_prefix
    !> Prefix for restart files
    character(len=128) :: rst_prefix = "restart"
+
+   !> @var global_freq_his
+   !> Default frequency for history files (seconds)
+   real :: global_freq_his = 3600.0
+
+   !> @var global_freq_avg
+   !> Default frequency for average files (seconds)
+   real :: global_freq_avg = 7200.0
+
+   !> @var global_freq_rst
+   !> Default frequency for restart files (seconds)
+   real :: global_freq_rst = 86400.0
+
+   !> @var global_to_his
+   !> Default flag for writing to history files
+   logical :: global_to_his = .true.
+
+   !> @var global_to_avg
+   !> Default flag for writing to average files
+   logical :: global_to_avg = .false.
+
+   !> @var global_to_rst
+   !> Default flag for writing to restart files
+   logical :: global_to_rst = .true.
 
    !> Configuration type for variable output settings
    !>
@@ -68,8 +85,10 @@ module namelist_output
    !> Array of variable output configurations read from namelist
    type(var_output_config), allocatable :: dyn_vars(:)
 
-   ! Namelist declarations
-   namelist /output_global/ his_prefix, avg_prefix, rst_prefix
+   ! Namelist declarations - Add global parameters to the namelist
+   namelist /output_global/ his_prefix, avg_prefix, rst_prefix, &
+                           global_freq_his, global_freq_avg, global_freq_rst, &
+                           global_to_his, global_to_avg, global_to_rst
    namelist /output_dyn/ dyn_vars
 
 contains

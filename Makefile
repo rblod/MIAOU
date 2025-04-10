@@ -27,7 +27,7 @@ file_manager_%.o: file_manager_%.F90 file_manager.o
 test_output.exe: $(OBJS)
 	$(FC) -o $@ $(OBJS) $(LDFLAGS)
 
-doc:
+doc: test_output.exe
 	ford ford.md
 
 test:
