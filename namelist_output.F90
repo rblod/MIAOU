@@ -2,7 +2,7 @@ module namelist_output
    implicit none
    private
    ! Ajout des fréquences globales et des flags globaux
-   public :: his_prefix, avg_prefix, rst_prefix, var_output_config, dyn_vars
+   public :: output_prefix, var_output_config, dyn_vars
    public :: global_freq_his, global_freq_avg, global_freq_rst
    public :: global_to_his, global_to_avg, global_to_rst
    public :: read_output_namelist
@@ -12,17 +12,9 @@ module namelist_output
    integer, parameter :: FILE_NOT_FOUND = -1
    integer, parameter :: NAMELIST_ERROR = -2
 
-   !> @var his_prefix
-   !> Prefix for history output files
-   character(len=128) :: his_prefix = "history"
-
-   !> @var avg_prefix
-   !> Prefix for time average output files
-   character(len=128) :: avg_prefix = "average"
-
-   !> @var rst_prefix
-   !> Prefix for restart files
-   character(len=128) :: rst_prefix = "restart"
+   !> @var output_prefix
+   !> Global prefix for all output files
+   character(len=128) :: output_prefix = "ocean"
 
    !> @var global_freq_his
    !> Default frequency for history files (seconds)
@@ -86,9 +78,9 @@ module namelist_output
    type(var_output_config), allocatable :: dyn_vars(:)
 
    ! Namelist declarations - Add global parameters to the namelist
-   namelist /output_global/ his_prefix, avg_prefix, rst_prefix, &
-                           global_freq_his, global_freq_avg, global_freq_rst, &
-                           global_to_his, global_to_avg, global_to_rst
+   namelist /output_global/ output_prefix, &
+      global_freq_his, global_freq_avg, global_freq_rst, &
+      global_to_his, global_to_avg, global_to_rst
    namelist /output_dyn/ dyn_vars
 
 contains
@@ -97,11 +89,11 @@ contains
    function get_free_unit() result(unit_id)
       integer :: unit_id
       logical :: is_open
-      
+
       ! Start at 10 to avoid standard units
       unit_id = 10
       do
-         inquire(unit=unit_id, opened=is_open)
+         inquire (unit=unit_id, opened=is_open)
          if (.not. is_open) return
          unit_id = unit_id + 1
       end do
@@ -112,14 +104,14 @@ contains
       integer, intent(in) :: error_code, iostatus
       character(len=*), intent(in) :: message
       character(len=*), intent(in), optional :: details
-      
+
       select case (error_code)
-         case (FILE_NOT_FOUND)
-            print *, "WARNING: ", trim(message), " [Error code: ", iostatus, "]"
-            print *, "Using default values instead."
-         case (NAMELIST_ERROR)
-            print *, "WARNING: ", trim(message), " [Error code: ", iostatus, "]"
-            if (present(details)) print *, "Details: ", trim(details)
+      case (FILE_NOT_FOUND)
+         print *, "WARNING: ", trim(message), " [Error code: ", iostatus, "]"
+         print *, "Using default values instead."
+      case (NAMELIST_ERROR)
+         print *, "WARNING: ", trim(message), " [Error code: ", iostatus, "]"
+         if (present(details)) print *, "Details: ", trim(details)
       end select
    end subroutine handle_error
 
@@ -130,34 +122,34 @@ contains
       integer :: count, ios
       character(len=1000) :: line
       logical :: in_namelist
-      
+
       count = 0
       in_namelist = .false.
-      
-      rewind(unit_id)
-      
+
+      rewind (unit_id)
+
       ! Scan file to count entries
       do
-         read(unit_id, '(A)', iostat=ios) line
+         read (unit_id, '(A)', iostat=ios) line
          if (ios /= 0) exit
-         
+
          ! Determine if we're in the target namelist
          if (index(line, '&'//trim(namelist_name)) > 0) then
             in_namelist = .true.
          end if
-         
+
          ! Count variable entries (lines with "dyn_vars")
          if (in_namelist .and. index(line, 'dyn_vars') > 0) then
             count = count + 1
          end if
-         
+
          ! Detect end of namelist
          if (in_namelist .and. index(line, '/') > 0) then
             exit
          end if
       end do
-      
-      rewind(unit_id)
+
+      rewind (unit_id)
    end function count_namelist_entries
 
    !> Read output configuration from namelist file
@@ -171,35 +163,35 @@ contains
    subroutine read_output_namelist()
       integer :: ios, i, n_read, unit_id
       character(len=256) :: error_msg
-      
+
       ! Free memory if already allocated
-      if (allocated(dyn_vars)) deallocate(dyn_vars)
-      
+      if (allocated(dyn_vars)) deallocate (dyn_vars)
+
       ! Open namelist file with standardized error handling
       unit_id = get_free_unit()
-      open(unit=unit_id, file="output_config.nml", status="old", action="read", iostat=ios)
-      
+      open (unit=unit_id, file="output_config.nml", status="old", action="read", iostat=ios)
+
       if (ios /= 0) then
          call handle_error(FILE_NOT_FOUND, "Cannot open output_config.nml", ios)
          ! Allocate empty array and return
-         allocate(dyn_vars(0))
+         allocate (dyn_vars(0))
          return
       end if
-      
+
       ! Read global configuration parameters
-      read(unit_id, nml=output_global, iostat=ios, iomsg=error_msg)
+      read (unit_id, nml=output_global, iostat=ios, iomsg=error_msg)
       if (ios /= 0) then
          call handle_error(NAMELIST_ERROR, "Error reading /output_global/", ios, error_msg)
-         rewind(unit_id)
+         rewind (unit_id)
       end if
-      
+
       ! First count the number of variables in the namelist file
       ! without allocating memory, using a counting mode read
       n_read = count_namelist_entries(unit_id, "output_dyn")
-      
+
       ! Now allocate with exact size needed
       if (n_read > 0) then
-         allocate(dyn_vars(n_read))
+         allocate (dyn_vars(n_read))
          ! Initialize with default values
          do i = 1, n_read
             dyn_vars(i)%name = ""
@@ -211,20 +203,20 @@ contains
             dyn_vars(i)%freq_avg = -1.0
             dyn_vars(i)%freq_rst = -1.0
          end do
-         
+
          ! Read the namelist again to fill values
-         rewind(unit_id)
-         read(unit_id, nml=output_dyn, iostat=ios, iomsg=error_msg)
+         rewind (unit_id)
+         read (unit_id, nml=output_dyn, iostat=ios, iomsg=error_msg)
          if (ios /= 0) then
             call handle_error(NAMELIST_ERROR, "Error reading /output_dyn/", ios, error_msg)
-            deallocate(dyn_vars)
-            allocate(dyn_vars(0))
+            deallocate (dyn_vars)
+            allocate (dyn_vars(0))
          end if
       else
-         allocate(dyn_vars(0))
+         allocate (dyn_vars(0))
       end if
-      
-      close(unit_id)
+
+      close (unit_id)
    end subroutine read_output_namelist
 
 end module namelist_output

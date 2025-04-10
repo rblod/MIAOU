@@ -1,7 +1,5 @@
 &output_global
-  his_prefix = "mysimu"
-  avg_prefix = "mysimu"
-  rst_prefix = "mysimu"
+  output_prefix = "ocean"
   global_freq_his = 3600.0
   global_freq_avg = 7200.0
   global_freq_rst = 9000.0

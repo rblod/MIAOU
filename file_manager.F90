@@ -13,8 +13,8 @@
 module file_manager
    use netcdf
    use grid_module
-   use namelist_output, only: his_prefix, avg_prefix, rst_prefix
    use netcdf_backend, only: nc_check, nc_define_variable, nc_write_variable
+   use namelist_output, only: output_prefix
 
    implicit none
    private
