@@ -1,5 +1,14 @@
 !===============================================================================
-! grid_module.F90 : Enhanced module for axis and grid definitions and operations
+!> @file grid_module.F90
+!>
+!> Enhanced module for axis and grid definitions and operations
+!>
+!> This module defines the core types and operations for handling structured grids,
+!> including axes (dimensions) and multi-dimensional grids. It provides functionality
+!> for creating standard grid configurations used in ocean models.
+!>
+!> @author Rachid Benshila
+!> @date 2025-04-10
 !===============================================================================
 module grid_module
    use netcdf, only: nf90_unlimited
@@ -14,28 +23,43 @@ module grid_module
    public :: create_rho_grid_2d, create_rho_grid_3d
    public :: create_time_axis, add_time_to_grid, get_time_dim_index
 
-   ! Definition of a basic axis
+   !> @type axis
+   !> Defines a single dimension (axis) in a grid system
+   !>
+   !> An axis represents a single dimension in a grid, such as longitude, latitude, or depth.
+   !> It contains metadata about the dimension including its size and properties.
    type :: axis
-      character(len=32) :: name        !! Name of the axis (e.g., "xi_rho", "eta_rho", "time")
-      character(len=64) :: long_name   !! Long descriptive name
-      character(len=32) :: units       !! Units of the axis
-      integer :: size                  !! Size of the axis
-      integer :: id = -1               !! NetCDF ID (assigned per file)
-      logical :: is_unlimited = .false. !! Whether this is an unlimited dimension
+      character(len=32) :: name        !< Name of the axis (e.g., "xi_rho", "eta_rho", "time")
+      character(len=64) :: long_name   !< Long descriptive name
+      character(len=32) :: units       !< Units of the axis
+      integer :: size                  !< Size of the axis
+      integer :: id = -1               !< NetCDF ID (assigned per file)
+      logical :: is_unlimited = .false. !< Whether this is an unlimited dimension
    end type axis
 
-   ! Definition of the grid using axes
+   !> @type grid
+   !> Defines a multi-dimensional grid using a collection of axes
+   !>
+   !> A grid represents a coordinate system composed of multiple axes.
+   !> It can be 1D, 2D, 3D, or higher-dimensional, and includes methods
+   !> for initialization and manipulation.
    type :: grid
-      character(len=32) :: name            !! Grid name (e.g., "rho", "u", "v")
-      type(axis), allocatable :: axes(:)   !! Array of axes that define this grid
-      integer :: ndims = 0                 !! Number of dimensions
+      character(len=32) :: name            !< Grid name (e.g., "rho", "u", "v")
+      type(axis), allocatable :: axes(:)   !< Array of axes that define this grid
+      integer :: ndims = 0                 !< Number of dimensions
 
-      ! Methods
    contains
-      procedure :: init_from_axes      !! Initialize grid from a list of axes
-      procedure :: add_axis            !! Add an axis to an existing grid
-      procedure :: get_axis_by_name    !! Get an axis by name
-      procedure :: clone               !! Create a copy of this grid
+      !> Initialize grid from a list of axes
+      procedure :: init_from_axes
+
+      !> Add an axis to an existing grid
+      procedure :: add_axis
+
+      !> Get an axis by name
+      procedure :: get_axis_by_name
+
+      !> Create a copy of this grid
+      procedure :: clone
    end type grid
 
 contains
@@ -44,7 +68,11 @@ contains
    ! Methods for the grid type
    !---------------------------------------------------------------------------
 
-   ! Initialize a grid from a list of axes
+   !> Initialize a grid from a list of axes
+   !>
+   !> @param[inout] this      The grid to initialize
+   !> @param[in]    name      Name for the grid
+   !> @param[in]    axes      Array of axes to use for initialization
    subroutine init_from_axes(this, name, axes)
       class(grid), intent(inout) :: this
       character(len=*), intent(in) :: name
@@ -62,7 +90,10 @@ contains
       end do
    end subroutine init_from_axes
 
-   ! Add an axis to an existing grid
+   !> Add an axis to an existing grid
+   !>
+   !> @param[inout] this      The grid to modify
+   !> @param[in]    new_axis  The axis to add
    subroutine add_axis(this, new_axis)
       class(grid), intent(inout) :: this
       type(axis), intent(in) :: new_axis
@@ -98,7 +129,11 @@ contains
       deallocate (temp)
    end subroutine add_axis
 
-   ! Get an axis by name
+   !> Get an axis by name
+   !>
+   !> @param[in]  this       The grid to search
+   !> @param[in]  axis_name  Name of the axis to find
+   !> @return     Index of the axis if found, -1 otherwise
    function get_axis_by_name(this, axis_name) result(axis_idx)
       class(grid), intent(in) :: this
       character(len=*), intent(in) :: axis_name
@@ -116,7 +151,10 @@ contains
       end do
    end function get_axis_by_name
 
-   ! Clone a grid (create a copy)
+   !> Clone a grid (create a copy)
+   !>
+   !> @param[in]  this      The grid to clone
+   !> @return     A new grid with the same properties and axes
    function clone(this) result(new_grid)
       class(grid), intent(in) :: this
       type(grid) :: new_grid
@@ -134,7 +172,14 @@ contains
    ! Helper functions to create common axes and grids
    !---------------------------------------------------------------------------
 
-   ! Create an axis with given parameters
+   !> Create an axis with given parameters
+   !>
+   !> @param[in]  name          Name of the axis
+   !> @param[in]  long_name     Long descriptive name
+   !> @param[in]  units         Units of the axis
+   !> @param[in]  size          Size of the axis (number of points)
+   !> @param[in]  is_unlimited  Optional: whether this is an unlimited dimension
+   !> @return     Newly created axis
    function create_axis(name, long_name, units, size, is_unlimited) result(new_axis)
       character(len=*), intent(in) :: name, long_name, units
       integer, intent(in) :: size
@@ -153,20 +198,27 @@ contains
          new_axis%is_unlimited = .false.
       end if
    end function create_axis
-   
-   ! Create an empty (0D) grid for scalar variables
+
+   !> Create an empty (0D) grid for scalar variables
+   !>
+   !> @return     A grid with no dimensions, suitable for scalar variables
    function create_empty_grid() result(empty_grid)
       type(grid) :: empty_grid
-      
+
       ! Initialize with no axes
       empty_grid%name = "scalar"
       empty_grid%ndims = 0
-      
+
       ! No axes to allocate
    end function create_empty_grid
-   
-   ! Create a 1D grid with flexible naming
-   ! Create a 1D grid with flexible naming
+
+   !> Create a 1D grid with flexible naming
+   !>
+   !> @param[in]  nx      Size of the x dimension
+   !> @param[in]  x_name  Optional: name for the x-axis
+   !> @param[in]  x_long  Optional: long name for the x-axis
+   !> @param[in]  x_unit  Optional: units for the x-axis
+   !> @return     A 1D grid with the specified properties
    function create_1d_grid(nx, x_name, x_long, x_unit) result(grid_1d)
       integer, intent(in) :: nx
       character(len=*), intent(in), optional :: x_name, x_long, x_unit
@@ -174,24 +226,34 @@ contains
       type(axis) :: x_axis
       character(len=32) :: x_name_local, x_unit_local
       character(len=64) :: x_long_local
-      
+
       ! Define default values and override if parameter is present
       x_name_local = "x_dim"
       if (present(x_name)) x_name_local = x_name
-      
+
       x_long_local = "X dimension"
       if (present(x_long)) x_long_local = x_long
-      
+
       x_unit_local = "count"
       if (present(x_unit)) x_unit_local = x_unit
-      
+
       ! Create the axis with local values
       x_axis = create_axis(x_name_local, x_long_local, x_unit_local, nx)
-      
+
       call grid_1d%init_from_axes("grid_1d", [x_axis])
    end function create_1d_grid
 
-   ! Create a 2D grid with flexible naming
+   !> Create a 2D grid with flexible naming
+   !>
+   !> @param[in]  nx      Size of the x dimension
+   !> @param[in]  ny      Size of the y dimension
+   !> @param[in]  x_name  Optional: name for the x-axis
+   !> @param[in]  y_name  Optional: name for the y-axis
+   !> @param[in]  x_long  Optional: long name for the x-axis
+   !> @param[in]  y_long  Optional: long name for the y-axis
+   !> @param[in]  x_unit  Optional: units for the x-axis
+   !> @param[in]  y_unit  Optional: units for the y-axis
+   !> @return     A 2D grid with the specified properties
    function create_2d_grid(nx, ny, x_name, y_name, x_long, y_long, x_unit, y_unit) result(grid_2d)
       integer, intent(in) :: nx, ny
       character(len=*), intent(in), optional :: x_name, y_name, x_long, y_long, x_unit, y_unit
@@ -199,38 +261,51 @@ contains
       type(axis) :: x_axis, y_axis
       character(len=32) :: x_name_local, y_name_local, x_unit_local, y_unit_local
       character(len=64) :: x_long_local, y_long_local
-      
-      ! Définir les valeurs par défaut et les écraser si le paramètre est présent
+
+      ! Define default values and override if parameter is present
       x_name_local = "x_dim"
       if (present(x_name)) x_name_local = x_name
-      
+
       y_name_local = "y_dim"
       if (present(y_name)) y_name_local = y_name
-      
+
       x_long_local = "X dimension"
       if (present(x_long)) x_long_local = x_long
-      
+
       y_long_local = "Y dimension"
       if (present(y_long)) y_long_local = y_long
-      
+
       x_unit_local = "count"
       if (present(x_unit)) x_unit_local = x_unit
-      
+
       y_unit_local = "count"
       if (present(y_unit)) y_unit_local = y_unit
-      
-      ! Créer les axes avec les valeurs locales
+
+      ! Create the axes with local values
       x_axis = create_axis(x_name_local, x_long_local, x_unit_local, nx)
       y_axis = create_axis(y_name_local, y_long_local, y_unit_local, ny)
-      
+
       call grid_2d%init_from_axes("grid_2d", [x_axis, y_axis])
    end function create_2d_grid
-      
-   ! Create a 3D grid with flexible naming
-   ! Create a 3D grid with flexible naming
+
+   !> Create a 3D grid with flexible naming
+   !>
+   !> @param[in]  nx      Size of the x dimension
+   !> @param[in]  ny      Size of the y dimension
+   !> @param[in]  nz      Size of the z dimension
+   !> @param[in]  x_name  Optional: name for the x-axis
+   !> @param[in]  y_name  Optional: name for the y-axis
+   !> @param[in]  z_name  Optional: name for the z-axis
+   !> @param[in]  x_long  Optional: long name for the x-axis
+   !> @param[in]  y_long  Optional: long name for the y-axis
+   !> @param[in]  z_long  Optional: long name for the z-axis
+   !> @param[in]  x_unit  Optional: units for the x-axis
+   !> @param[in]  y_unit  Optional: units for the y-axis
+   !> @param[in]  z_unit  Optional: units for the z-axis
+   !> @return     A 3D grid with the specified properties
    function create_3d_grid(nx, ny, nz, x_name, y_name, z_name, &
-                          x_long, y_long, z_long, &
-                          x_unit, y_unit, z_unit) result(grid_3d)
+                           x_long, y_long, z_long, &
+                           x_unit, y_unit, z_unit) result(grid_3d)
       integer, intent(in) :: nx, ny, nz
       character(len=*), intent(in), optional :: &
          x_name, y_name, z_name, x_long, y_long, z_long, x_unit, y_unit, z_unit
@@ -239,44 +314,48 @@ contains
       character(len=32) :: x_name_local, y_name_local, z_name_local
       character(len=32) :: x_unit_local, y_unit_local, z_unit_local
       character(len=64) :: x_long_local, y_long_local, z_long_local
-      
+
       ! Define default values and override if parameter is present
       x_name_local = "x_dim"
       if (present(x_name)) x_name_local = x_name
-      
+
       y_name_local = "y_dim"
       if (present(y_name)) y_name_local = y_name
-      
+
       z_name_local = "z_dim"
       if (present(z_name)) z_name_local = z_name
-      
+
       x_long_local = "X dimension"
       if (present(x_long)) x_long_local = x_long
-      
+
       y_long_local = "Y dimension"
       if (present(y_long)) y_long_local = y_long
-      
+
       z_long_local = "Z dimension"
       if (present(z_long)) z_long_local = z_long
-      
+
       x_unit_local = "count"
       if (present(x_unit)) x_unit_local = x_unit
-      
+
       y_unit_local = "count"
       if (present(y_unit)) y_unit_local = y_unit
-      
+
       z_unit_local = "levels"
       if (present(z_unit)) z_unit_local = z_unit
-      
+
       ! Create axes with local values
       x_axis = create_axis(x_name_local, x_long_local, x_unit_local, nx)
       y_axis = create_axis(y_name_local, y_long_local, y_unit_local, ny)
       z_axis = create_axis(z_name_local, z_long_local, z_unit_local, nz)
-      
+
       call grid_3d%init_from_axes("grid_3d", [x_axis, y_axis, z_axis])
    end function create_3d_grid
 
-   ! Create a 2D rho-grid (typical for ocean models)
+   !> Create a 2D rho-grid (typical for ocean models)
+   !>
+   !> @param[in]  nx  Size of the xi dimension
+   !> @param[in]  ny  Size of the eta dimension
+   !> @return     A 2D grid with standard rho-grid axes
    function create_rho_grid_2d(nx, ny) result(rho_grid)
       integer, intent(in) :: nx, ny
       type(grid) :: rho_grid
@@ -288,7 +367,12 @@ contains
       call rho_grid%init_from_axes("rho2d", [xi_axis, eta_axis])
    end function create_rho_grid_2d
 
-   ! Create a 3D rho-grid
+   !> Create a 3D rho-grid
+   !>
+   !> @param[in]  nx  Size of the xi dimension
+   !> @param[in]  ny  Size of the eta dimension
+   !> @param[in]  nz  Size of the s dimension (vertical levels)
+   !> @return     A 3D grid with standard rho-grid axes
    function create_rho_grid_3d(nx, ny, nz) result(rho_grid)
       integer, intent(in) :: nx, ny, nz
       type(grid) :: rho_grid
@@ -301,7 +385,10 @@ contains
       call rho_grid%init_from_axes("rho3d", [xi_axis, eta_axis, s_axis])
    end function create_rho_grid_3d
 
-   ! Create a time axis
+   !> Create a time axis
+   !>
+   !> @param[in]  unlimited  Optional: whether the time axis should be unlimited
+   !> @return     Time axis with proper attributes
    function create_time_axis(unlimited) result(time_axis)
       logical, intent(in), optional :: unlimited
       type(axis) :: time_axis
@@ -316,7 +403,10 @@ contains
       time_axis = create_axis("time", "Time", "seconds", 0, is_unlimited)
    end function create_time_axis
 
-   ! Add time to a grid
+   !> Add time to a grid
+   !>
+   !> @param[in]  base_grid  The grid to extend with a time dimension
+   !> @return     A new grid with the same axes as base_grid plus a time axis
    function add_time_to_grid(base_grid) result(time_grid)
       type(grid), intent(in) :: base_grid
       type(grid) :: time_grid
@@ -330,7 +420,10 @@ contains
       call time_grid%add_axis(time_axis)
    end function add_time_to_grid
 
-   ! Helper function to get time dimension index in a grid
+   !> Helper function to get time dimension index in a grid
+   !>
+   !> @param[in]  grid_obj  The grid to search
+   !> @return     Index of the time dimension if found, -1 otherwise
    function get_time_dim_index(grid_obj) result(time_idx)
       type(grid), intent(in) :: grid_obj
       integer :: time_idx, i

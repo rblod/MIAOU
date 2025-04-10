@@ -1,54 +1,90 @@
 !>
-!>  Module to read output info in a namelist
+!> Module to read output configuration from a namelist file
+!>
+!> This module manages the reading of output configuration from namelist files,
+!> handling both global output settings and individual variable output preferences.
+!> It supports configuration for history files, average files, and restart files.
+!>
+!> @author Rachid Benshila
+!> @date 2025-04-10
 !>
 module namelist_output
    implicit none
+   private
+   public :: his_prefix, avg_prefix, rst_prefix, var_output_config, dyn_vars
+   public :: read_output_namelist
 
-   ! Global configuration
+   !> @var his_prefix
+   !> Prefix for history output files
    character(len=128) :: his_prefix = "history"
-   !! global history file name
+
+   !> @var avg_prefix
+   !> Prefix for time average output files
    character(len=128) :: avg_prefix = "average"
-   !! global average file name
+
+   !> @var rst_prefix
+   !> Prefix for restart files
    character(len=128) :: rst_prefix = "restart"
-   !! global restart file name
 
+   !> Configuration type for variable output settings
+   !>
+   !> This type defines all parameters needed to configure how a variable
+   !> is written to different output file types.
+   !> @note Used directly in namelist input
    type :: var_output_config
-   !! the type used for namelist to get the informations
+      !> Variable name
       character(len=32)  :: name
-      logical            :: wrt = .false.     !! Write his
-      logical            :: avg = .false.     !! Write avg
-      logical            :: rst = .false.     !! Write rst
-      character(len=128) :: file_prefix = ""  !! History file
-      real               :: freq_his = -1.0   !! History frequency
-      real               :: freq_avg = -1.0   !! Average frequency
-      real               :: freq_rst = -1.0   !! Restart frequency
-   end type
 
+      !> Flag to enable/disable history file output
+      logical            :: wrt = .false.
+
+      !> Flag to enable/disable average file output
+      logical            :: avg = .false.
+
+      !> Flag to enable/disable restart file output
+      logical            :: rst = .false.
+
+      !> Custom file prefix for this variable (if not using global prefix)
+      character(len=128) :: file_prefix = ""
+
+      !> Output frequency for history files (seconds)
+      !> @note Negative value disables output
+      real               :: freq_his = -1.0
+
+      !> Output frequency for average files (seconds)
+      !> @note Negative value disables output
+      real               :: freq_avg = -1.0
+
+      !> Output frequency for restart files (seconds)
+      !> @note Negative value disables output
+      real               :: freq_rst = -1.0
+   end type var_output_config
+
+   !> Array of variable output configurations read from namelist
    type(var_output_config), allocatable :: dyn_vars(:)
-   !! variables read the namelist
 
-   !
+   ! Namelist declarations
    namelist /output_global/ his_prefix, avg_prefix, rst_prefix
    namelist /output_dyn/ dyn_vars
 
 contains
-!>
-!>
-!> Read global and indivual infos
-!>
-!>
 
+   !> Read output configuration from namelist file
+   !>
+   !> This subroutine reads both global output settings and variable-specific
+   !> output settings from the namelist file 'output_config.nml'.
+   !> If the file cannot be read, default values are used.
+   !>
+   !> @note The namelist format must match the structure defined by the
+   !>       namelist declarations in this module.
    subroutine read_output_namelist()
-      integer :: ios, i, n_read
-      !! dummy index and logical
-      type(var_output_config), allocatable :: tmp(:)
-      !! temporary
+      integer :: ios, i, n_read  ! I/O status, loop index, and count
+      type(var_output_config), allocatable :: tmp(:)  ! Temporary array for resizing
 
-      integer, parameter :: maxvars = 100
-      !! Maximum variables to be read in namelist
+      integer, parameter :: maxvars = 100  ! Maximum number of variables supported in namelist
 
-      ! Votre lecture du namelist doit ressembler à ceci :
-      allocate(dyn_vars(maxvars))
+      ! Allocate and initialize the array with default values
+      allocate (dyn_vars(maxvars))
       dyn_vars(:)%name = ""
       dyn_vars(:)%wrt = .false.
       dyn_vars(:)%avg = .false.
@@ -58,33 +94,33 @@ contains
       dyn_vars(:)%freq_avg = -1.0
       dyn_vars(:)%freq_rst = -1.0
 
-      ! Lecture du namelist
-      open(unit=10, file="output_config.nml", status="old", action="read", iostat=ios)
+      ! Open the namelist file
+      open (unit=10, file="output_config.nml", status="old", action="read", iostat=ios)
       if (ios /= 0) then
          print *, "Warning: Cannot open output_config.nml, using defaults. Error code:", ios
-         deallocate(dyn_vars)
-         allocate(dyn_vars(0))
+         deallocate (dyn_vars)
+         allocate (dyn_vars(0))
          return
       end if
 
-      ! Lire les préfixes globaux
-      read(10, nml=output_global, iostat=ios)
+      ! Read global configuration parameters
+      read (10, nml=output_global, iostat=ios)
       if (ios /= 0) then
          print *, "Warning: Error reading namelist /output_global/, using defaults. Error code:", ios
-         rewind(10)
+         rewind (10)
       end if
 
-      ! Lire les variables et leurs attributs
-read (10, nml=output_dyn, iostat=ios)
-if (ios /= 0) then
-   print *, "Warning: Error reading namelist /output_dyn/"
-   if (allocated(dyn_vars)) deallocate(dyn_vars)  ! Assurez-vous d'abord qu'il est alloué
-   allocate (dyn_vars(0))  ! Réallouez directement, pas via move_alloc
-   close (10)
-   return
-end if
+      ! Read variable-specific output settings
+      read (10, nml=output_dyn, iostat=ios)
+      if (ios /= 0) then
+         print *, "Warning: Error reading namelist /output_dyn/"
+         if (allocated(dyn_vars)) deallocate (dyn_vars)
+         allocate (dyn_vars(0))
+         close (10)
+         return
+      end if
 
-      ! Count of variables read
+      ! Count how many variables were actually defined
       n_read = 0
       do i = 1, size(dyn_vars)
          if (trim(dyn_vars(i)%name) /= "") then
@@ -94,7 +130,7 @@ end if
          end if
       end do
 
-      ! copy to temporary array and correct dimensions for dyn_var
+      ! Resize array to exact size needed
       if (n_read > 0) then
          call move_alloc(dyn_vars, tmp)
          allocate (dyn_vars(n_read))

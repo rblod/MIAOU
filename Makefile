@@ -16,5 +16,12 @@ all: test_output.exe
 test_output.exe: $(OBJS)
 	$(FC) -o $@ $(OBJS) $(LDFLAGS)
 
+doc:
+	ford ford.md
+
+test:
+	python ./verify_output.py
+
+
 clean:
 	rm -f *.nc *.o *.mod test_output.exe
