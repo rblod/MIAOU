@@ -234,25 +234,4 @@ contains
       target_var%file_prefix = dyn_var%file_prefix
    end subroutine copy_namelist_config
 
-   ! Commented out code kept for reference
-   ! !> Generate filenames for a variable
-   ! !>
-   ! !> @param[inout] var  Variable to generate filenames for
-   ! subroutine set_variable_filenames(var)
-   !    type(nc_var), intent(inout) :: var
-   !
-   !    ! Generate filenames based on frequencies
-   !    if (var%to_his .and. var%freq_his > 0) then
-   !       var%filename_his = generate_filename(var%file_prefix, "his", var%freq_his)
-   !    end if
-   !
-   !    if (var%to_avg .and. var%freq_avg > 0) then
-   !       var%filename_avg = generate_filename(var%file_prefix, "avg", var%freq_avg)
-   !    end if
-   !
-   !    if (var%to_rst .and. var%freq_rst > 0) then
-   !       var%filename_rst = generate_filename(var%file_prefix, "rst", var%freq_rst)
-   !    end if
-   ! end subroutine set_variable_filenames
-
 end module variables_registry
