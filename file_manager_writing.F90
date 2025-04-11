@@ -141,7 +141,8 @@ contains
    if (open_files(file_idx)%time_varid /= -1) then
       time_slice(1) = time_value
       call nc_check(nf90_put_var(ncid, open_files(file_idx)%time_varid, time_slice, &
-                                 start=[open_files(file_idx)%time_index], count=[1]))
+                                 start=[open_files(file_idx)%time_index], count=[1]), &
+                    "Write time axis in file : "//trim(open_files(file_idx)%filename))
    end if
 
    ! Process all registered variables again to write them

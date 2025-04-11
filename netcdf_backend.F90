@@ -69,12 +69,12 @@ contains
             ! If not, create it
             if (grid_axes(i)%is_unlimited) then
                call nc_check(nf90_def_dim(ncid, trim(grid_axes(i)%name), &
-                                    nf90_unlimited, dim_id),      &
-                                    "Create axis : "//trim(grid_axes(i)%name))
+                                          nf90_unlimited, dim_id), &
+                             "Create axis : "//trim(grid_axes(i)%name))
             else
                call nc_check(nf90_def_dim(ncid, trim(grid_axes(i)%name), &
-                                    grid_axes(i)%size, dim_id), &
-                                    "Create axis : "//trim(grid_axes(i)%name))
+                                          grid_axes(i)%size, dim_id), &
+                             "Create axis : "//trim(grid_axes(i)%name))
             end if
          end if
 
@@ -104,14 +104,14 @@ contains
 
       ! Define the variable
       call nc_check(nf90_def_var(ncid, var_name, nf90_real, dim_ids, varid), &
-                                "Create variable : "//trim(var_name))
+                    "Create variable : "//trim(var_name))
 
       ! Add attributes
       call nc_check(nf90_put_att(ncid, varid, "long_name", trim(var_long_name)), &
-                                "Create attribute : "//trim(var_long_name))
+                    "Create attribute : "//trim(var_long_name))
 
       call nc_check(nf90_put_att(ncid, varid, "units", trim(var_units)), &
-                                "Create attribute : "//trim(var_units))
+                    "Create attribute : "//trim(var_units))
 
       deallocate (dim_ids)
    end subroutine nc_define_variable
