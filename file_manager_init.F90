@@ -70,7 +70,8 @@ contains
             print *, "Creating file: ", trim(filename), " for variable: ", trim(registered_vars(i)%name)
 
             ! Create NetCDF file
-            call nc_check(nf90_create(filename, nf90_clobber, ncid))
+            call nc_check(nf90_create(filename, nf90_clobber, ncid), &
+                         "Create file : "//trim(filename))
             print *, "File created: ", trim(filename)
 
             ! Add to open files list
@@ -91,7 +92,8 @@ contains
             print *, 'open_file ok'
 
             ! Create time dimension
-            call nc_check(nf90_def_dim(ncid, "time", nf90_unlimited, open_files(file_idx)%time_dimid))
+            call nc_check(nf90_def_dim(ncid, "time", nf90_unlimited, open_files(file_idx)%time_dimid), &
+                                       "Write dimension : time")
             print *, 'time dim ok'
 
             ! Create time variable if units provided
@@ -111,7 +113,7 @@ contains
          print *, 'define variable ok'
 
          ! End definition mode
-         call nc_check(nf90_enddef(ncid))
+         call nc_check(nf90_enddef(ncid),"Endef in initialize_output_files")
       end do
    end do
    end procedure initialize_output_files

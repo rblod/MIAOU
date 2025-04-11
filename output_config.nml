@@ -17,7 +17,7 @@
   ! 3D variable (full 3D now used)
   dyn_vars(4) = "temp", .true., .false., .true., "temperature", 3600., -1., 9000.
   ! 0D scalar variable (new)
-  dyn_vars(5) = "wind", .true., .true., .false., "meteo", 1800., 3600., -1.
+  dyn_vars(5) = "wind_speed", .true., .true., .false., "meteo", 1800., 3600., -1.
   ! 1D profile variable (new)
-  dyn_vars(6) = "profile", .true., .true., .true., "profile", 1800., 3600., 7200.
+  dyn_vars(6) = "temp_profile", .true., .true., .true., "profile", 1800., 3600., 7200.
 /
