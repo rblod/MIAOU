@@ -7,7 +7,7 @@ FFLAGS = -O0 -g -Wall -fcheck=all -fbacktrace -I$(NCDF_INC)
 LDFLAGS = -g -L$(NCDF_LIB) -lnetcdff -lnetcdf
 
 # Original objects (parent modules)
-MODULES = ocean_var.o namelist_output.o grid_module.o netcdf_backend.o file_manager.o variables_registry.o
+MODULES = ocean_var.o namelist_output.o grid_module.o netcdf_utils.o netcdf_backend.o file_manager.o variables_registry.o
 
 # Submodules for file_manager
 SUBMODULES = file_manager_buffers.o file_manager_registration.o file_manager_fileops.o \
