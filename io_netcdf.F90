@@ -361,11 +361,11 @@ end function nc_define_variable_in_file
       time_index = get_time_index_from_ncid(ncid)
       
       ! Determine if this variable should be written to this file
-      should_write = should_write_variable(var, file_type, time_value)
-      if (.not. should_write) then
-         status = 0  ! Not an error, just nothing to write
-         return
-      end if
+     ! should_write = should_write_variable(var, file_type, time_value)
+     ! if (.not. should_write) then
+     !    status = 0  ! Not an error, just nothing to write
+     !    return
+     ! end if
       
       ! Get variable ID in this file
       varid = get_varid_for_variable(var, file_type, ncid)
