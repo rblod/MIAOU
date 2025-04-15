@@ -168,6 +168,10 @@ contains
       start = [1, 1, time_index]
       count = [size(data, 1), size(data, 2), 1]
 
+      print *, "nc_write_2d: Writing data to file with ncid=", ncid, ", varid=", varid, ", time_index=", time_index
+print *, "  Data dimensions:", size(data, 1), "x", size(data, 2)
+print *, "  Sample values:", data(1,1), data(1,min(2,size(data,2))), data(min(2,size(data,1)),1)
+
       call nc_check(nf90_put_var(ncid, varid, data, start=start, count=count))
    end subroutine nc_write_2d
 

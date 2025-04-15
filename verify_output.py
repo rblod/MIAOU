@@ -112,13 +112,13 @@ def parse_namelist(filename="output_config.nml"):
             config["global"]["global_to_rst"] = to_rst_match.group(1) == ".true."
 
     # Extract variables
-    dyn_match = re.search(r"&output_dyn(.*?)/", content, re.DOTALL)
+    dyn_match = re.search(r"&output_vars(.*?)/", content, re.DOTALL)
     if dyn_match:
         dyn_section = dyn_match.group(1)
 
-        # Find all dyn_vars lines
+        # Find all var_configs lines
         var_lines = re.findall(
-            r'dyn_vars\(\d+\)\s*=\s*"([^"]*)"\s*,\s*(\.true\.|\.false\.)\s*,\s*(\.true\.|\.false\.)\s*,\s*(\.true\.|\.false\.)\s*,\s*"([^"]*)"\s*,\s*([^,]*),\s*([^,]*),\s*([^.,]*)',
+            r'var_configs\(\d+\)\s*=\s*"([^"]*)"\s*,\s*(\.true\.|\.false\.)\s*,\s*(\.true\.|\.false\.)\s*,\s*(\.true\.|\.false\.)\s*,\s*"([^"]*)"\s*,\s*([^,]*),\s*([^,]*),\s*([^.,]*)',
             dyn_section,
         )
         for var_line in var_lines:

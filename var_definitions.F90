@@ -1,5 +1,5 @@
 !===============================================================================
-!> @file variable_definitions.F90
+!> @file var_definitions.F90
 !>
 !> Module for oceanographic variable definitions
 !>
@@ -7,17 +7,17 @@
 !> in an oceanographic model. Users simply need to add their variables to the
 !> init_var_definitions subroutine with minimal information required.
 !>
-!> @author Rachid Benshila (original code)
+!> @author Rachid Benshila
 !> @date 2025-04-11
 !===============================================================================
-module variable_definitions
-   use file_manager, only: nc_var
-   use grid_module
+module var_definitions
+   use grid_module, only: grid
+   use io_definitions, only: io_variable
    use ocean_var
    implicit none
    private
    
-   !> Common grid definitions (to be initialized in variables_registry)
+   !> Common grid definitions (to be initialized in var_registry)
    type(grid), public :: grd_scalar  !< Grid for scalar variables
    type(grid), public :: grd_profile !< 1D grid for profiles
    type(grid), public :: grd_rho     !< 2D rho-grid (cell centers)
@@ -28,11 +28,11 @@ module variable_definitions
    !> Maximum number of variables to export
    integer, parameter :: MAX_VARS = 10
    
-   !> Array of variables to be exported to NetCDF files
-   type(nc_var), public :: vars_to_export(MAX_VARS)
-   
    !> Number of defined variables
    integer, public :: num_vars = 0
+   
+   !> Array of variables to be exported
+   type(io_variable), public, allocatable :: model_vars(:)
    
    public :: init_var_definitions, define_0d_var, define_1d_var, define_2d_var, define_3d_var
 
@@ -45,6 +45,10 @@ contains
    subroutine init_var_definitions()
       ! Reset the counter
       num_vars = 0
+      
+      ! Initialize the variables array
+      if (allocated(model_vars)) deallocate(model_vars)
+      allocate(model_vars(MAX_VARS))
       
       ! Define all export variables using type-specific helper functions
       call define_2d_var("zeta", "free surface", "m", grd_rho, zeta)
@@ -60,7 +64,7 @@ contains
    
    !> Define a 0D (scalar) variable
    !>
-   !> @param[in] name       Variable name for NetCDF output
+   !> @param[in] name       Variable name for output
    !> @param[in] long_name  Long descriptive name (for attribute)
    !> @param[in] units      Units of the variable (for attribute)
    !> @param[in] var_grid   Grid associated with the variable
@@ -74,24 +78,24 @@ contains
       num_vars = num_vars + 1
       
       if (num_vars > MAX_VARS) then
-         print *, "ERROR: Too many variables defined. Increase MAX_VARS in variable_definitions.F90"
+         print *, "ERROR: Too many variables defined. Increase MAX_VARS in var_definitions.F90"
          stop 1
       end if
       
       ! Initialize variable with basic metadata
-      vars_to_export(num_vars)%name = name
-      vars_to_export(num_vars)%long_name = long_name
-      vars_to_export(num_vars)%units = units
-      vars_to_export(num_vars)%var_grid = var_grid
-      vars_to_export(num_vars)%ndims = 0
+      model_vars(num_vars)%name = name
+      model_vars(num_vars)%long_name = long_name
+      model_vars(num_vars)%units = units
+      model_vars(num_vars)%var_grid = var_grid
+      model_vars(num_vars)%ndims = 0
       
       ! Associate data pointer
-      vars_to_export(num_vars)%scalar => data
+      model_vars(num_vars)%scalar => data
    end subroutine define_0d_var
    
    !> Define a 1D variable
    !>
-   !> @param[in] name       Variable name for NetCDF output
+   !> @param[in] name       Variable name for output
    !> @param[in] long_name  Long descriptive name (for attribute)
    !> @param[in] units      Units of the variable (for attribute)
    !> @param[in] var_grid   Grid associated with the variable
@@ -105,24 +109,24 @@ contains
       num_vars = num_vars + 1
       
       if (num_vars > MAX_VARS) then
-         print *, "ERROR: Too many variables defined. Increase MAX_VARS in variable_definitions.F90"
+         print *, "ERROR: Too many variables defined. Increase MAX_VARS in var_definitions.F90"
          stop 1
       end if
       
       ! Initialize variable with basic metadata
-      vars_to_export(num_vars)%name = name
-      vars_to_export(num_vars)%long_name = long_name
-      vars_to_export(num_vars)%units = units
-      vars_to_export(num_vars)%var_grid = var_grid
-      vars_to_export(num_vars)%ndims = 1
+      model_vars(num_vars)%name = name
+      model_vars(num_vars)%long_name = long_name
+      model_vars(num_vars)%units = units
+      model_vars(num_vars)%var_grid = var_grid
+      model_vars(num_vars)%ndims = 1
       
       ! Associate data pointer
-      vars_to_export(num_vars)%data_1d => data
+      model_vars(num_vars)%data_1d => data
    end subroutine define_1d_var
    
    !> Define a 2D variable
    !>
-   !> @param[in] name       Variable name for NetCDF output
+   !> @param[in] name       Variable name for output
    !> @param[in] long_name  Long descriptive name (for attribute)
    !> @param[in] units      Units of the variable (for attribute)
    !> @param[in] var_grid   Grid associated with the variable
@@ -136,24 +140,24 @@ contains
       num_vars = num_vars + 1
       
       if (num_vars > MAX_VARS) then
-         print *, "ERROR: Too many variables defined. Increase MAX_VARS in variable_definitions.F90"
+         print *, "ERROR: Too many variables defined. Increase MAX_VARS in var_definitions.F90"
          stop 1
       end if
       
       ! Initialize variable with basic metadata
-      vars_to_export(num_vars)%name = name
-      vars_to_export(num_vars)%long_name = long_name
-      vars_to_export(num_vars)%units = units
-      vars_to_export(num_vars)%var_grid = var_grid
-      vars_to_export(num_vars)%ndims = 2
+      model_vars(num_vars)%name = name
+      model_vars(num_vars)%long_name = long_name
+      model_vars(num_vars)%units = units
+      model_vars(num_vars)%var_grid = var_grid
+      model_vars(num_vars)%ndims = 2
       
       ! Associate data pointer
-      vars_to_export(num_vars)%data_2d => data
+      model_vars(num_vars)%data_2d => data
    end subroutine define_2d_var
    
    !> Define a 3D variable
    !>
-   !> @param[in] name       Variable name for NetCDF output
+   !> @param[in] name       Variable name for output
    !> @param[in] long_name  Long descriptive name (for attribute)
    !> @param[in] units      Units of the variable (for attribute)
    !> @param[in] var_grid   Grid associated with the variable
@@ -167,19 +171,19 @@ contains
       num_vars = num_vars + 1
       
       if (num_vars > MAX_VARS) then
-         print *, "ERROR: Too many variables defined. Increase MAX_VARS in variable_definitions.F90"
+         print *, "ERROR: Too many variables defined. Increase MAX_VARS in var_definitions.F90"
          stop 1
       end if
       
       ! Initialize variable with basic metadata
-      vars_to_export(num_vars)%name = name
-      vars_to_export(num_vars)%long_name = long_name
-      vars_to_export(num_vars)%units = units
-      vars_to_export(num_vars)%var_grid = var_grid
-      vars_to_export(num_vars)%ndims = 3
+      model_vars(num_vars)%name = name
+      model_vars(num_vars)%long_name = long_name
+      model_vars(num_vars)%units = units
+      model_vars(num_vars)%var_grid = var_grid
+      model_vars(num_vars)%ndims = 3
       
       ! Associate data pointer
-      vars_to_export(num_vars)%data_3d => data
+      model_vars(num_vars)%data_3d => data
    end subroutine define_3d_var
    
-end module variable_definitions
+end module var_definitions
