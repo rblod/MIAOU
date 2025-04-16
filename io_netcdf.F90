@@ -21,10 +21,11 @@ module io_netcdf
    private
 
    ! Public procedures for NetCDF I/O operations
-   public :: nc_initialize, nc_finalize, nc_end_definition
-   public :: nc_create_file, nc_close_file
-   public :: nc_write_variable_data, nc_write_time
-   public :: generate_filename, nc_define_variable_in_file
+public :: nc_initialize, nc_finalize
+public :: nc_create_file, nc_close_file
+public :: nc_write_variable_data, nc_write_time
+public :: generate_filename, nc_define_variable_in_file
+public :: nc_end_definition, get_varid_for_variable
 
    ! Constants
    real, parameter :: TOLERANCE = 1.0e-5
@@ -48,7 +49,6 @@ module io_netcdf
       integer :: varid_rst = -1  !< ID in restart file
 
       !< Averaging buffers for average files
-      real :: scalar_avg = 0.0                     !< For 0D
       real, allocatable :: avg_buffer_1d(:)        !< For 1D
       real, allocatable :: avg_buffer_2d(:, :)     !< For 2D
       real, allocatable :: avg_buffer_3d(:, :, :)  !< For 3D

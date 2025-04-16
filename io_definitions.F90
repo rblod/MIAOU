@@ -26,28 +26,34 @@ module io_definitions
    !> It contains metadata and configuration for output operations,
    !> independent of the specific storage format.
    type :: io_variable
-      character(len=32) :: name            !< Variable name
-      character(len=64) :: long_name       !< Long descriptive name
-      character(len=32) :: units           !< Variable units
-      type(grid) :: var_grid               !< Grid associated with the variable
-      integer :: ndims = 0                 !< Dimension count (0=scalar, 1=1D, 2=2D, 3=3D)
+      ! Champs existants
+      character(len=32) :: name            
+      character(len=64) :: long_name       
+      character(len=32) :: units           
+      type(grid) :: var_grid               
+      integer :: ndims = 0                 
+      
+      logical :: to_his = .false.          
+      logical :: to_avg = .false.          
+      logical :: to_rst = .false.          
+      
+      real, pointer :: scalar => null()             
+      real, pointer :: data_1d(:) => null()         
+      real, pointer :: data_2d(:, :) => null()      
+      real, pointer :: data_3d(:, :, :) => null()   
+      
+      real :: freq_his = -1.                        
+      real :: freq_avg = -1.                        
+      real :: freq_rst = -1.                        
+      character(len=128) :: file_prefix = ""
 
-      !< Output flags
-      logical :: to_his = .false.          !< Write to history file
-      logical :: to_avg = .false.          !< Write to average file
-      logical :: to_rst = .false.          !< Write to restart file
-
-      !< Data pointers for different dimensions - only one will be associated
-      real, pointer :: scalar => null()             !< 0D data
-      real, pointer :: data_1d(:) => null()         !< 1D data
-      real, pointer :: data_2d(:, :) => null()      !< 2D data
-      real, pointer :: data_3d(:, :, :) => null()   !< 3D data
-
-      !< Time and frequency settings
-      real :: freq_his = -1.                        !< Frequency for history (seconds)
-      real :: freq_avg = -1.                        !< Frequency for average (seconds)
-      real :: freq_rst = -1.                        !< Frequency for restart (seconds)
-      character(len=128) :: file_prefix = ""        !< Custom file prefix
+      ! Nouveaux champs pour l'accumulation des moyennes
+      real :: scalar_avg = 0.0                      ! Pour les scalaires (0D)
+      real, allocatable :: data_avg_1d(:)           ! Pour les tableaux 1D
+      real, allocatable :: data_avg_2d(:, :)        ! Pour les tableaux 2D
+      real, allocatable :: data_avg_3d(:, :, :)     ! Pour les tableaux 3D
+      integer :: avg_count = 0                      ! Compteur pour le nombre d'accumulations
+      logical :: avg_initialized = .false.          ! Flag pour marquer si les buffers sont initialisés
    end type io_variable
 
    !> @type file_descriptor

@@ -20,16 +20,16 @@ module netcdf_backend
    ! Public interface
    public :: nc_check, nc_define_variable, nc_write_variable
 
-   !> Generic interface for writing variables of different dimensions
-   !>
-   !> This interface selects the appropriate specific procedure based on
-   !> the dimensionality of the data being written.
-   interface nc_write_variable
-      module procedure nc_write_scalar
-      module procedure nc_write_1d
-      module procedure nc_write_2d
-      module procedure nc_write_3d
-   end interface nc_write_variable
+ !> Generic interface for writing variables of different dimensions
+!>
+!> This interface selects the appropriate specific procedure based on
+!> the dimensionality of the data being written.
+interface nc_write_variable
+   module procedure nc_write_scalar      ! Pour un tableau 0D (rank-0)
+   module procedure nc_write_1d          ! Pour les tableaux 1D
+   module procedure nc_write_2d          ! Pour les tableaux 2D
+   module procedure nc_write_3d          ! Pour les tableaux 3D
+end interface nc_write_variable
 
 contains
 
@@ -116,80 +116,97 @@ contains
       deallocate (dim_ids)
    end subroutine nc_define_variable
 
-   !---------------------------------------------------------------------------
-   ! Variable writing for different dimensions
-   !---------------------------------------------------------------------------
+!> Write a scalar variable to a NetCDF file
+!>
+!> @param[in] ncid        NetCDF file ID
+!> @param[in] varid       Variable ID in the file
+!> @param[in] data        Scalar data to write
+!> @param[in] time_index  Index of the time step to write
+subroutine nc_write_scalar(ncid, varid, data, time_index)
+   integer, intent(in) :: ncid, varid, time_index
+   real, intent(in) :: data  ! Peut être un scalaire ou un tableau dimensionné (0)
+   integer :: start(1), count(1)
+   real :: value
 
-   !> Write a scalar (0D) variable to a NetCDF file
-   !>
-   !> @param[in] ncid        NetCDF file ID
-   !> @param[in] varid       Variable ID in the file
-   !> @param[in] data        Scalar data to write
-   !> @param[in] time_index  Index of the time step to write
-   subroutine nc_write_scalar(ncid, varid, data, time_index)
-      integer, intent(in) :: ncid, varid, time_index
-      real, intent(in) :: data
-      integer :: start(1), count(1)
+   ! Obtenir la valeur, qu'elle vienne d'un scalaire ou d'un tableau
+   value = data
+   
+   start = [time_index]
+   count = [1]
 
-      start = [time_index]
-      count = [1]
+   call nc_check(nf90_put_var(ncid, varid, [value], start=start, count=count))
+end subroutine nc_write_scalar
 
-      call nc_check(nf90_put_var(ncid, varid, [data], start=start, count=count))
-   end subroutine nc_write_scalar
 
-   !> Write a 1D variable to a NetCDF file
-   !>
-   !> @param[in] ncid        NetCDF file ID
-   !> @param[in] varid       Variable ID in the file
-   !> @param[in] data        1D array data to write
-   !> @param[in] time_index  Index of the time step to write
-   subroutine nc_write_1d(ncid, varid, data, time_index)
-      integer, intent(in) :: ncid, varid, time_index
-      real, intent(in) :: data(:)
-      integer :: start(2), count(2)
 
-      start = [1, time_index]
-      count = [size(data, 1), 1]
+!> Write a 1D variable to a NetCDF file
+!>
+!> @param[in] ncid        NetCDF file ID
+!> @param[in] varid       Variable ID in the file
+!> @param[in] data        1D array data to write
+!> @param[in] time_index  Index of the time step to write
+subroutine nc_write_1d(ncid, varid, data, time_index)
+   integer, intent(in) :: ncid, varid, time_index
+   real, intent(in) :: data(:)    ! Accepte n'importe quel tableau 1D
+   integer :: start(2), count(2)
 
-      call nc_check(nf90_put_var(ncid, varid, data, start=start, count=count))
-   end subroutine nc_write_1d
+   start = [1, time_index]
+   count = [size(data, 1), 1]
 
-   !> Write a 2D variable to a NetCDF file
-   !>
-   !> @param[in] ncid        NetCDF file ID
-   !> @param[in] varid       Variable ID in the file
-   !> @param[in] data        2D array data to write
-   !> @param[in] time_index  Index of the time step to write
-   subroutine nc_write_2d(ncid, varid, data, time_index)
-      integer, intent(in) :: ncid, varid, time_index
-      real, intent(in) :: data(:, :)
-      integer :: start(3), count(3)
+   call nc_check(nf90_put_var(ncid, varid, data, start=start, count=count))
+end subroutine nc_write_1d
 
-      start = [1, 1, time_index]
-      count = [size(data, 1), size(data, 2), 1]
+!> Write a 2D variable to a NetCDF file
+!>
+!> @param[in] ncid        NetCDF file ID
+!> @param[in] varid       Variable ID in the file
+!> @param[in] data        2D array data to write
+!> @param[in] time_index  Index of the time step to write
+subroutine nc_write_2d(ncid, varid, data, time_index)
+   integer, intent(in) :: ncid, varid, time_index
+   real, intent(in) :: data(:, :)    ! Accepte n'importe quel tableau 2D
+   integer :: start(3), count(3)
 
-      print *, "nc_write_2d: Writing data to file with ncid=", ncid, ", varid=", varid, ", time_index=", time_index
-print *, "  Data dimensions:", size(data, 1), "x", size(data, 2)
-print *, "  Sample values:", data(1,1), data(1,min(2,size(data,2))), data(min(2,size(data,1)),1)
+   start = [1, 1, time_index]
+   count = [size(data, 1), size(data, 2), 1]
 
-      call nc_check(nf90_put_var(ncid, varid, data, start=start, count=count))
-   end subroutine nc_write_2d
+   call nc_check(nf90_put_var(ncid, varid, data, start=start, count=count))
+end subroutine nc_write_2d
 
-   !> Write a 3D variable to a NetCDF file
-   !>
-   !> @param[in] ncid        NetCDF file ID
-   !> @param[in] varid       Variable ID in the file
-   !> @param[in] data        3D array data to write
-   !> @param[in] time_index  Index of the time step to write
-   subroutine nc_write_3d(ncid, varid, data, time_index)
-      integer, intent(in) :: ncid, varid, time_index
-      real, intent(in) :: data(:, :, :)
-      integer :: start(4), count(4)
+!> Write a 3D variable to a NetCDF file
+!>
+!> @param[in] ncid        NetCDF file ID
+!> @param[in] varid       Variable ID in the file
+!> @param[in] data        3D array data to write
+!> @param[in] time_index  Index of the time step to write
+subroutine nc_write_3d(ncid, varid, data, time_index)
+   integer, intent(in) :: ncid, varid, time_index
+   real, intent(in) :: data(:, :, :)    ! Accepte n'importe quel tableau 3D
+   integer :: start(4), count(4)
 
-      start = [1, 1, 1, time_index]
-      count = [size(data, 1), size(data, 2), size(data, 3), 1]
+   start = [1, 1, 1, time_index]
+   count = [size(data, 1), size(data, 2), size(data, 3), 1]
 
-      call nc_check(nf90_put_var(ncid, varid, data, start=start, count=count))
-   end subroutine nc_write_3d
+   call nc_check(nf90_put_var(ncid, varid, data, start=start, count=count))
+end subroutine nc_write_3d
+
+!> Write a scalar value to a NetCDF file
+!>
+!> @param[in] ncid        NetCDF file ID
+!> @param[in] varid       Variable ID in the file
+!> @param[in] data        Scalar value to write
+!> @param[in] time_index  Index of the time step to write
+subroutine nc_write_scalar_value(ncid, varid, data, time_index)
+   integer, intent(in) :: ncid, varid, time_index
+   real, intent(in) :: data
+   integer :: start(1), count(1)
+
+   start = [time_index]
+   count = [1]
+
+   call nc_check(nf90_put_var(ncid, varid, [data], start=start, count=count))
+end subroutine nc_write_scalar_value
+
+
 
 end module netcdf_backend

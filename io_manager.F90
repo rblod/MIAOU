@@ -13,10 +13,13 @@
 module io_manager
    use io_definitions, only: io_variable, file_descriptor, io_var_registry
    use io_config, only: read_io_config, apply_config_to_variable, get_output_prefix
-   use io_netcdf, only: nc_initialize, nc_finalize, nc_create_file, &
-                        nc_write_variable_data, nc_write_time, &
-                        nc_close_file, generate_filename, nc_define_variable_in_file,&
-                        nc_end_definition
+use io_netcdf, only: nc_initialize, nc_finalize, nc_create_file, &
+                     nc_write_variable_data, nc_write_time, &
+                     nc_close_file, generate_filename, nc_define_variable_in_file, &
+                     nc_end_definition, get_varid_for_variable
+ use io_netcdf_avg, only : accumulate_average, write_average, reset_average,&
+ init_avg_buffers, accumulate_avg, write_variable_avg, reset_avg
+
    implicit none
    private
 
@@ -424,77 +427,95 @@ end function create_output_files
    !> @param[in] current_time  Current model time in seconds
    !> @param[in] is_final_step Optional: flag indicating if this is the final time step
    !> @return    Status code (0 = success)
-   function write_all_data(current_time, is_final_step) result(status)
-      real, intent(in) :: current_time
-      logical, intent(in), optional :: is_final_step
-      integer :: status
-      
-      integer :: var_idx, file_idx
-      type(io_variable) :: var
-      logical :: final_step, any_written
-      
-      status = 0
-      
-      ! Check if this is the final time step
-      final_step = .false.
-      if (present(is_final_step)) then
-         final_step = is_final_step
-      end if
-      
-      ! Create output files if they don't exist yet
-if (.not. allocated(open_files)) then
-   ! Récupérer les unités de temps et le calendrier stockés lors de l'initialisation
-   if (create_output_files(stored_time_units, stored_calendar) == 0) then
-      print *, "Warning: No output files created"
-      status = -1
-      return
-   end if
-end if
-      
-      ! Process all open files
-      if (allocated(open_files)) then
-         do file_idx = 1, size(open_files)
-            any_written = .false.
-            
-            ! For restart files, force writing on final step
-            if (trim(open_files(file_idx)%type) == "rst" .and. final_step) then
-               any_written = .true.
-            end if
-            
-! Process all variables for this file
-do var_idx = 1, var_registry%size()
-   var = var_registry%get(var_idx)
+function write_all_data(current_time, is_final_step) result(status)
+   real, intent(in) :: current_time
+   logical, intent(in), optional :: is_final_step
+   integer :: status
    
-   ! Determine if this variable should be written to this file
-if (should_write_to_file(var, open_files(file_idx), current_time) .or. &
-   (final_step .and. trim(open_files(file_idx)%type) == "rst" .and. var%to_rst .and. &
-    belongs_to_file(var, open_files(file_idx)))) then      
-      ! Write variable data
-      if (nc_write_variable_data(open_files(file_idx), var, current_time) == 0) then
-         any_written = .true.
-         print *, "Wrote variable ", trim(var%name), " to file ", &
-                  trim(open_files(file_idx)%filename), " at time ", current_time
-      else
-         print *, "Failed to write variable ", trim(var%name), " to file ", &
-                  trim(open_files(file_idx)%filename), " at time ", current_time
+   integer :: var_idx, file_idx
+   type(io_variable) :: var
+   logical :: final_step, any_written, is_avg_write_time
+   
+   status = 0
+   
+   ! Check if this is the final time step
+   final_step = .false.
+   if (present(is_final_step)) then
+      final_step = is_final_step
+   end if
+   
+   ! Create output files if they don't exist yet
+   if (.not. allocated(open_files)) then
+      if (create_output_files(stored_time_units, stored_calendar) == 0) then
+         print *, "Warning: No output files created"
+         status = -1
+         return
       end if
    end if
-end do
+   
+   ! First, accumulate averages for all variables
+   do var_idx = 1, var_registry%size()
+      var = var_registry%get(var_idx)
+      
+      ! Only accumulate for variables that need averages
+      if (var%to_avg) then
+                 call accumulate_avg(var)
+      end if
+   end do
+   
+   ! Process all open files
+   if (allocated(open_files)) then
+      do file_idx = 1, size(open_files)
+         any_written = .false.
+         
+         ! For restart files, force writing on final step
+         if (trim(open_files(file_idx)%type) == "rst" .and. final_step) then
+            any_written = .true.
+         end if
+         
+         ! Check if it's time to write averages
+         is_avg_write_time = .false.
+         if (trim(open_files(file_idx)%type) == "avg") then
+            is_avg_write_time = abs(mod(current_time, open_files(file_idx)%freq)) < TOLERANCE
+         end if
+         
+         ! Process all variables for this file
+         do var_idx = 1, var_registry%size()
+            var = var_registry%get(var_idx)
             
-            ! Write time value if any variables were written
-            if (any_written) then
-
-   print *, "Writing time value to file: ", trim(open_files(file_idx)%filename)
-   status = nc_write_time(open_files(file_idx), current_time)
-   if (status /= 0) then
-      print *, "Warning: Failed to write time value to file: ", &
-               trim(open_files(file_idx)%filename)
-   end if
-
+            ! Determine if this variable should be written to this file
+            if (should_write_to_file(var, open_files(file_idx), current_time) .or. &
+               (final_step .and. trim(open_files(file_idx)%type) == "rst" .and. var%to_rst .and. &
+                belongs_to_file(var, open_files(file_idx)))) then
+               
+               ! Write variable data
+               if (trim(open_files(file_idx)%type) == "avg" .and. is_avg_write_time) then
+                   ! Écrire la moyenne
+                   if (write_variable_avg(var, open_files(file_idx)%backend_id,     &
+                                        get_varid_for_variable(var, open_files(file_idx)%type, &
+                                        open_files(file_idx)%backend_id),&
+                                        open_files(file_idx)%time_index) == 0) then
+                       any_written = .true.
+                       
+                       ! Réinitialiser la moyenne après écriture
+                       call reset_avg(var)
+                   end if
+               else
+                  ! Write normal data
+                  if (nc_write_variable_data(open_files(file_idx), var, current_time) == 0) then
+                     any_written = .true.
+                  end if
+               end if
             end if
          end do
-      end if
-   end function write_all_data
+         
+         ! Write time value if any variables were written
+         if (any_written) then
+            status = nc_write_time(open_files(file_idx), current_time)
+         end if
+      end do
+   end if
+end function write_all_data
 
    !> Determine if a variable should be written to a file at the current time
    !>
