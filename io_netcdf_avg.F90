@@ -36,7 +36,6 @@ module io_netcdf_avg
 
 contains
 
-
 ! Dans io_netcdf_avg.F90 ou un nouveau module
    subroutine init_avg_buffers(var)
       type(io_variable), intent(inout) :: var

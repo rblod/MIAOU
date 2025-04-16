@@ -188,21 +188,4 @@ contains
       call nc_check(nf90_put_var(ncid, varid, data, start=start, count=count))
    end subroutine nc_write_3d
 
-!> Write a scalar value to a NetCDF file
-!>
-!> @param[in] ncid        NetCDF file ID
-!> @param[in] varid       Variable ID in the file
-!> @param[in] data        Scalar value to write
-!> @param[in] time_index  Index of the time step to write
-   subroutine nc_write_scalar_value(ncid, varid, data, time_index)
-      integer, intent(in) :: ncid, varid, time_index
-      real, intent(in) :: data
-      integer :: start(1), count(1)
-
-      start = [time_index]
-      count = [1]
-
-      call nc_check(nf90_put_var(ncid, varid, [data], start=start, count=count))
-   end subroutine nc_write_scalar_value
-
 end module netcdf_backend

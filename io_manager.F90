@@ -259,7 +259,7 @@ contains
                         end select
 
                         ! Define the variable in the file
-                        status = nc_define_variable_in_file(file_desc, var, FILE_TYPES(j))
+                        status = nc_define_variable_in_file(file_desc, var)
                         if (status /= 0) then
                            print *, "Warning: Failed to define variable ", trim(var%name), " in file ", trim(filename)
                         end if
@@ -298,7 +298,7 @@ contains
                         end select
 
                         ! Define the variable in the file
-                        status = nc_define_variable_in_file(file_desc, var, FILE_TYPES(j))
+                        status = nc_define_variable_in_file(file_desc, var)
                         if (status /= 0) then
                            print *, "Warning: Failed to define variable ", trim(var%name), " in file ", trim(filename)
                         end if
@@ -337,7 +337,7 @@ contains
                         end select
 
                         ! Define the variable in the file
-                        status = nc_define_variable_in_file(file_desc, var, FILE_TYPES(j))
+                        status = nc_define_variable_in_file(file_desc, var)
                         if (status /= 0) then
                            print *, "Warning: Failed to define variable ", trim(var%name), " in file ", trim(filename)
                         end if
@@ -410,7 +410,7 @@ contains
             ! Determine if this variable should be written to this file
             if (should_write_to_file(var, open_files(file_idx), current_time)) then
                ! Write variable data
-               status = nc_write_variable_data(open_files(file_idx), var, current_time)
+               status = nc_write_variable_data(open_files(file_idx), var)
 
                ! Write time value
                if (status == 0) then
@@ -491,7 +491,7 @@ contains
                   if (trim(open_files(file_idx)%type) == "avg" .and. is_avg_write_time) then
                      ! Écrire la moyenne
                      if (write_variable_avg(var, open_files(file_idx)%backend_id, &
-                                            get_varid_for_variable(var, open_files(file_idx)%type, &
+                                            get_varid_for_variable(var, &
                                                                    open_files(file_idx)%backend_id), &
                                             open_files(file_idx)%time_index) == 0) then
                         any_written = .true.
@@ -501,7 +501,7 @@ contains
                      end if
                   else
                      ! Write normal data
-                     if (nc_write_variable_data(open_files(file_idx), var, current_time) == 0) then
+                     if (nc_write_variable_data(open_files(file_idx), var) == 0) then
                         any_written = .true.
                      end if
                   end if

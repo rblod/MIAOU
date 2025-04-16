@@ -30,9 +30,6 @@ module io_netcdf
    ! Constants
    real, parameter :: TOLERANCE = 1.0e-5
 
-   ! File types
-   character(len=*), parameter :: FILE_TYPES(3) = ["his", "avg", "rst"]
-
    ! Internal types for NetCDF implementation
    !> Extended file descriptor with NetCDF-specific information
    type, extends(file_descriptor) :: netcdf_file
@@ -59,9 +56,6 @@ module io_netcdf
 
    ! Registry of open files
    type(netcdf_file), allocatable :: open_files(:)
-
-   ! Registry of variables
-   type(io_var_registry) :: var_registry
 
 contains
 
@@ -129,7 +123,7 @@ contains
       integer :: status
 
       type(netcdf_file) :: nc_file
-      integer :: ncid, file_idx
+      integer :: ncid
 
       ! Initialize file descriptor
       nc_file%filename = filename
@@ -280,10 +274,9 @@ contains
    !> @param[in]     var          Variable to define
    !> @param[in]     file_type    Type of file ("his", "avg", or "rst")
    !> @return        Status code (0 = success)
-   function nc_define_variable_in_file(file_desc, var, file_type) result(status)
+   function nc_define_variable_in_file(file_desc, var) result(status)
       type(file_descriptor), intent(in) :: file_desc
       type(io_variable), intent(in) :: var
-      character(len=*), intent(in) :: file_type
       integer :: status
 
       integer :: ncid, time_dimid, i
@@ -339,15 +332,13 @@ contains
    !> @param[in]     var          Variable to write
    !> @param[in]     time_value   Current time value
    !> @return        Status code (0 = success)
-   function nc_write_variable_data(file_desc, var, time_value) result(status)
+   function nc_write_variable_data(file_desc, var) result(status)
       type(file_descriptor), intent(in) :: file_desc
       type(io_variable), intent(in) :: var
-      real, intent(in) :: time_value
       integer :: status
 
       integer :: ncid, varid, time_index
       character(len=16) :: file_type
-      logical :: should_write
 
       status = -1
 
@@ -358,15 +349,8 @@ contains
       file_type = get_file_type_from_ncid(ncid)
       time_index = get_time_index_from_ncid(ncid)
 
-      ! Determine if this variable should be written to this file
-      ! should_write = should_write_variable(var, file_type, time_value)
-      ! if (.not. should_write) then
-      !    status = 0  ! Not an error, just nothing to write
-      !    return
-      ! end if
-
       ! Get variable ID in this file
-      varid = get_varid_for_variable(var, file_type, ncid)
+      varid = get_varid_for_variable(var, ncid)
       if (varid <= 0) then
          print *, "Warning: Variable ", trim(var%name), " not defined in file"
          status = -1
@@ -465,26 +449,6 @@ contains
       end if
    end function get_ncid_from_descriptor
 
-   !> Get time dimension ID for a file
-   !>
-   !> @param[in]  ncid  NetCDF file ID
-   !> @return     Time dimension ID or -1 if not found
-   function get_time_dimid_from_ncid(ncid) result(time_dimid)
-      integer, intent(in) :: ncid
-      integer :: time_dimid, i
-
-      time_dimid = -1
-
-      if (allocated(open_files)) then
-         do i = 1, size(open_files)
-            if (open_files(i)%ncid == ncid) then
-               time_dimid = open_files(i)%time_dimid
-               return
-            end if
-         end do
-      end if
-   end function get_time_dimid_from_ncid
-
    !> Get time variable ID for a file
    !>
    !> @param[in]  ncid  NetCDF file ID
@@ -569,12 +533,10 @@ contains
    !> @param[in]  file_type  Type of file ("his", "avg", or "rst")
    !> @param[in]  ncid       NetCDF file ID
    !> @return     Variable ID or -1 if not found
-   function get_varid_for_variable(var, file_type, ncid) result(varid)
+   function get_varid_for_variable(var, ncid) result(varid)
       type(io_variable), intent(in) :: var
-      character(len=*), intent(in) :: file_type
       integer, intent(in) :: ncid
       integer :: varid
-      integer :: dimid
 
       varid = -1
 
@@ -586,55 +548,6 @@ contains
       ! If not found, return -1
       varid = -1
    end function get_varid_for_variable
-
-   !> Determine if a variable should be written to a file at the current time
-   !>
-   !> @param[in]  var         Variable to check
-   !> @param[in]  file_type   Type of file ("his", "avg", or "rst")
-   !> @param[in]  time_value  Current time value
-   !> @return     True if variable should be written
-   function should_write_variable(var, file_type, time_value) result(should_write)
-      type(io_variable), intent(in) :: var
-      character(len=*), intent(in) :: file_type
-      real, intent(in) :: time_value
-      logical :: should_write
-      real :: freq
-
-      should_write = .false.
-
-      ! Check if this variable should be written to this type of file
-      select case (trim(file_type))
-      case ("his")
-         if (.not. var%to_his) return
-         freq = var%freq_his
-      case ("avg")
-         if (.not. var%to_avg) return
-         freq = var%freq_avg
-      case ("rst")
-         if (.not. var%to_rst) return
-         freq = var%freq_rst
-      case default
-         return
-      end select
-
-      ! Check frequency
-      if (freq <= 0.0) return
-
-      ! Determine if we should write at this time step
-      if (abs(time_value) < TOLERANCE) then
-         ! First time step
-         if (trim(file_type) == "his") then
-            ! For "his" files - always write
-            should_write = .true.
-         else
-            ! For "avg" and "rst" files - don't write at time 0
-            should_write = .false.
-         end if
-      else
-         ! Other time steps - check frequency
-         should_write = abs(mod(time_value, freq)) < TOLERANCE
-      end if
-   end function should_write_variable
 
    function nc_end_definition(file_desc) result(status)
       type(file_descriptor), intent(in) :: file_desc
