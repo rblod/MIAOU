@@ -2,7 +2,7 @@
 project: MIAOU - Modular I/O Architecture for Ocean and Unified models
 summary: A flexible, modular I/O system for oceanographic models
 author: Rachid Benshila
-email: rachid.benshila@legos.obs-mip.fr
+email: rachid.benshila@univ-tlse3.fr
 src_dir: .
 output_dir: ./doc
 page_dir: pages
