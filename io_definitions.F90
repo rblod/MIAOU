@@ -4,7 +4,7 @@
 !> Core definitions for the I/O system
 !>
 !> This module defines the fundamental types and interfaces for the I/O system.
-!> It establishes the common structures used throughout the output system, 
+!> It establishes the common structures used throughout the output system,
 !> independent of any specific backend implementation.
 !>
 !> @author Rachid Benshila
@@ -27,24 +27,24 @@ module io_definitions
    !> independent of the specific storage format.
    type :: io_variable
       ! Champs existants
-      character(len=32) :: name            
-      character(len=64) :: long_name       
-      character(len=32) :: units           
-      type(grid) :: var_grid               
-      integer :: ndims = 0                 
-      
-      logical :: to_his = .false.          
-      logical :: to_avg = .false.          
-      logical :: to_rst = .false.          
-      
-      real, pointer :: scalar => null()             
-      real, pointer :: data_1d(:) => null()         
-      real, pointer :: data_2d(:, :) => null()      
-      real, pointer :: data_3d(:, :, :) => null()   
-      
-      real :: freq_his = -1.                        
-      real :: freq_avg = -1.                        
-      real :: freq_rst = -1.                        
+      character(len=32) :: name
+      character(len=64) :: long_name
+      character(len=32) :: units
+      type(grid) :: var_grid
+      integer :: ndims = 0
+
+      logical :: to_his = .false.
+      logical :: to_avg = .false.
+      logical :: to_rst = .false.
+
+      real, pointer :: scalar => null()
+      real, pointer :: data_1d(:) => null()
+      real, pointer :: data_2d(:, :) => null()
+      real, pointer :: data_3d(:, :, :) => null()
+
+      real :: freq_his = -1.
+      real :: freq_avg = -1.
+      real :: freq_rst = -1.
       character(len=128) :: file_prefix = ""
 
       ! Nouveaux champs pour l'accumulation des moyennes
@@ -66,7 +66,7 @@ module io_definitions
       character(len=16) :: type       !< "his" (history), "avg" (average), or "rst" (restart)
       real :: freq                    !< Write frequency (seconds)
       integer :: time_index = 1       !< Current time write index
-      
+
       ! Backend-specific identifiers can be added by the implementation
       integer :: backend_id = -1      !< ID in the backend system (e.g., NetCDF ncid)
    end type file_descriptor
@@ -80,17 +80,17 @@ module io_definitions
       private
       type(io_variable), allocatable :: variables(:)  !< Array of registered variables
       integer :: count = 0                            !< Number of registered variables
-      
+
    contains
       !> Add a variable to the registry
       procedure :: add => registry_add_variable
-      
+
       !> Find a variable by name
       procedure :: find => registry_find_variable
-      
+
       !> Get the number of registered variables
       procedure :: size => registry_size
-      
+
       !> Get a variable by index
       procedure :: get => registry_get_variable
    end type io_var_registry
@@ -106,13 +106,13 @@ contains
       type(io_variable), intent(in) :: var
       type(io_variable), allocatable :: temp(:)
       integer :: i, new_size
-      
+
       if (.not. allocated(this%variables)) then
          ! Initial allocation with extra space
-         allocate(this%variables(10))
+         allocate (this%variables(10))
          this%count = 1
          this%variables(1) = var
-         
+
          ! Mark other elements as unused
          do i = 2, 10
             this%variables(i)%name = ""
@@ -126,28 +126,28 @@ contains
                return
             end if
          end do
-         
+
          ! No empty slots, need to expand
          new_size = size(this%variables) + max(5, nint(size(this%variables)*0.5))
-         allocate(temp(new_size))
-         
+         allocate (temp(new_size))
+
          ! Copy existing data
          temp(1:size(this%variables)) = this%variables
-         
+
          ! Add new variable
          temp(size(this%variables) + 1) = var
          this%count = size(this%variables) + 1
-         
+
          ! Mark new slots as empty
          do i = this%count + 1, new_size
             temp(i)%name = ""
          end do
-         
+
          ! Replace old array with new one
          call move_alloc(temp, this%variables)
       end if
    end subroutine registry_add_variable
-   
+
    !> Find a variable by name
    !>
    !> @param[in]  this     The registry to search
@@ -157,10 +157,10 @@ contains
       class(io_var_registry), intent(in) :: this
       character(len=*), intent(in) :: varname
       integer :: idx, i
-      
+
       idx = -1
       if (.not. allocated(this%variables)) return
-      
+
       do i = 1, this%count
          if (trim(this%variables(i)%name) == trim(varname)) then
             idx = i
@@ -168,7 +168,7 @@ contains
          end if
       end do
    end function registry_find_variable
-   
+
    !> Get the number of registered variables
    !>
    !> @param[in]  this  The registry to query
@@ -176,10 +176,10 @@ contains
    function registry_size(this) result(sz)
       class(io_var_registry), intent(in) :: this
       integer :: sz
-      
+
       sz = this%count
    end function registry_size
-   
+
    !> Get a variable by index
    !>
    !> @param[in]  this  The registry to query
@@ -189,7 +189,7 @@ contains
       class(io_var_registry), intent(in) :: this
       integer, intent(in) :: idx
       type(io_variable) :: var
-      
+
       if (allocated(this%variables) .and. idx > 0 .and. idx <= this%count) then
          var = this%variables(idx)
       else

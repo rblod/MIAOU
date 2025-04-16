@@ -86,107 +86,106 @@ contains
 !>
 !> @param[in] filename  Path to the namelist file (optional, defaults to "output_config.nml")
 !> @return    Status code (0 = success)
-function read_io_config(filename) result(status)
-   character(len=*), intent(in), optional :: filename
-   integer :: status
-   character(len=256) :: config_file
-   integer :: unit_id, ios, i, count
-   character(len=256) :: error_msg
-   type(var_config), allocatable :: temp(:)
+   function read_io_config(filename) result(status)
+      character(len=*), intent(in), optional :: filename
+      integer :: status
+      character(len=256) :: config_file
+      integer :: unit_id, ios, i, count
+      character(len=256) :: error_msg
+      type(var_config), allocatable :: temp(:)
 
-   ! Set default filename if not provided
-   if (present(filename)) then
-      config_file = filename
-   else
-      config_file = "output_config.nml"
-   end if
+      ! Set default filename if not provided
+      if (present(filename)) then
+         config_file = filename
+      else
+         config_file = "output_config.nml"
+      end if
 
-   ! Free memory if already allocated
-   if (allocated(var_configs)) deallocate(var_configs)
+      ! Free memory if already allocated
+      if (allocated(var_configs)) deallocate (var_configs)
 
-   ! Get a free unit number
-   unit_id = get_free_unit()
-   
-   ! Open the namelist file
-   open(unit=unit_id, file=trim(config_file), status="old", action="read", iostat=ios)
+      ! Get a free unit number
+      unit_id = get_free_unit()
+
+      ! Open the namelist file
+      open (unit=unit_id, file=trim(config_file), status="old", action="read", iostat=ios)
       print *, "Reading configuration from file: ", trim(config_file)
 
+      if (ios /= 0) then
+         call handle_error(FILE_NOT_FOUND, "Cannot open "//trim(config_file), ios)
+         status = FILE_NOT_FOUND
+         allocate (var_configs(0))
+         return
+      end if
 
-   if (ios /= 0) then
-      call handle_error(FILE_NOT_FOUND, "Cannot open "//trim(config_file), ios)
-      status = FILE_NOT_FOUND
-      allocate(var_configs(0))
-      return
-   end if
+      ! Read global configuration parameters
+      read (unit_id, nml=output_global, iostat=ios, iomsg=error_msg)
+      if (ios /= 0) then
+         call handle_error(NAMELIST_ERROR, "Error reading /output_global/", ios, error_msg)
+         rewind (unit_id)
+      end if
+      print *, "Successfully read global configuration"
+      print *, "  output_prefix = ", trim(output_prefix)
+      print *, "  global_freq_his = ", global_freq_his
+      print *, "  global_freq_avg = ", global_freq_avg
+      print *, "  global_freq_rst = ", global_freq_rst
+      ! Pre-allocate with a maximum expected size
+      ! This avoids issues with indexed namelist entries
+      allocate (var_configs(20))  ! Large enough for all expected variables
 
-   ! Read global configuration parameters
-   read(unit_id, nml=output_global, iostat=ios, iomsg=error_msg)
-   if (ios /= 0) then
-      call handle_error(NAMELIST_ERROR, "Error reading /output_global/", ios, error_msg)
-      rewind(unit_id)
-   end if
-print *, "Successfully read global configuration"
-   print *, "  output_prefix = ", trim(output_prefix)
-   print *, "  global_freq_his = ", global_freq_his
-   print *, "  global_freq_avg = ", global_freq_avg
-   print *, "  global_freq_rst = ", global_freq_rst
-   ! Pre-allocate with a maximum expected size
-   ! This avoids issues with indexed namelist entries
-   allocate(var_configs(20))  ! Large enough for all expected variables
-   
-   ! Initialize to empty values to detect which entries were actually read
-   do i = 1, size(var_configs)
-      var_configs(i)%name = ""
-   end do
+      ! Initialize to empty values to detect which entries were actually read
+      do i = 1, size(var_configs)
+         var_configs(i)%name = ""
+      end do
 
-   ! Read variable configurations
-   rewind(unit_id)
-   read(unit_id, nml=output_vars, iostat=ios, iomsg=error_msg)
-   if (ios /= 0) then
-      call handle_error(NAMELIST_ERROR, "Error reading /output_vars/", ios, error_msg)
-   end if
+      ! Read variable configurations
+      rewind (unit_id)
+      read (unit_id, nml=output_vars, iostat=ios, iomsg=error_msg)
+      if (ios /= 0) then
+         call handle_error(NAMELIST_ERROR, "Error reading /output_vars/", ios, error_msg)
+      end if
 
 ! [après avoir lu var_configs...]
-   if (allocated(var_configs)) then
-      print *, "Read ", size(var_configs), " variable configurations:"
-      do i = 1, size(var_configs)
-         print *, "  Var ", i, ": name=", trim(var_configs(i)%name), &
-                  ", prefix='", trim(var_configs(i)%file_prefix), "'", &
-                  ", to_his=", var_configs(i)%wrt, &
-                  ", to_avg=", var_configs(i)%avg, &
-                  ", to_rst=", var_configs(i)%rst
-      end do
-   else
-      print *, "ERROR: var_configs not allocated after reading!"
-   end if
-
-   ! Count how many entries were actually read
-   count = 0
-   do i = 1, size(var_configs)
-      if (trim(var_configs(i)%name) /= "") then
-         count = count + 1
+      if (allocated(var_configs)) then
+         print *, "Read ", size(var_configs), " variable configurations:"
+         do i = 1, size(var_configs)
+            print *, "  Var ", i, ": name=", trim(var_configs(i)%name), &
+               ", prefix='", trim(var_configs(i)%file_prefix), "'", &
+               ", to_his=", var_configs(i)%wrt, &
+               ", to_avg=", var_configs(i)%avg, &
+               ", to_rst=", var_configs(i)%rst
+         end do
       else
-         exit
+         print *, "ERROR: var_configs not allocated after reading!"
       end if
-   end do
 
-   ! Resize array to actual size
-   if (count > 0 .and. count < size(var_configs)) then
-      allocate(temp(count))
-      temp(1:count) = var_configs(1:count)
-      deallocate(var_configs)
-      allocate(var_configs(count))
-      var_configs = temp
-      deallocate(temp)
-   else if (count == 0) then
-      ! No valid entries found, create an empty array
-      deallocate(var_configs)
-      allocate(var_configs(0))
-   end if
+      ! Count how many entries were actually read
+      count = 0
+      do i = 1, size(var_configs)
+         if (trim(var_configs(i)%name) /= "") then
+            count = count + 1
+         else
+            exit
+         end if
+      end do
 
-   close(unit_id)
-   status = SUCCESS
-end function read_io_config
+      ! Resize array to actual size
+      if (count > 0 .and. count < size(var_configs)) then
+         allocate (temp(count))
+         temp(1:count) = var_configs(1:count)
+         deallocate (var_configs)
+         allocate (var_configs(count))
+         var_configs = temp
+         deallocate (temp)
+      else if (count == 0) then
+         ! No valid entries found, create an empty array
+         deallocate (var_configs)
+         allocate (var_configs(0))
+      end if
+
+      close (unit_id)
+      status = SUCCESS
+   end function read_io_config
 
    !> Apply configuration to a variable
    !>
@@ -201,8 +200,8 @@ end function read_io_config
       logical :: found
 
       found = .false.
-    !  if(.not. allocated(var_configs)) stop
-      
+      !  if(.not. allocated(var_configs)) stop
+
       ! Look for this variable in the configurations
       if (allocated(var_configs)) then
          do i = 1, size(var_configs)
@@ -211,14 +210,14 @@ end function read_io_config
                call apply_specific_config(var, var_configs(i))
                found = .true.
 
-   print *, "Applied specific config for: ", trim(var%name), &
-                     " file_prefix=", trim(var%file_prefix), &
-                     " to_his=", var%to_his, " to_avg=", var%to_avg, " to_rst=", var%to_rst
+               print *, "Applied specific config for: ", trim(var%name), &
+                  " file_prefix=", trim(var%file_prefix), &
+                  " to_his=", var%to_his, " to_avg=", var%to_avg, " to_rst=", var%to_rst
                exit
             end if
          end do
       end if
-      
+
       ! If not found, apply global defaults
       if (.not. found) then
          var%to_his = global_to_his
@@ -302,7 +301,7 @@ end function read_io_config
    function get_global_freq(file_type) result(freq)
       character(len=*), intent(in) :: file_type
       real :: freq
-      
+
       select case (trim(file_type))
       case ("his")
          freq = global_freq_his
@@ -322,7 +321,7 @@ end function read_io_config
    function get_global_flag(file_type) result(flag)
       character(len=*), intent(in) :: file_type
       logical :: flag
-      
+
       select case (trim(file_type))
       case ("his")
          flag = global_to_his
@@ -345,7 +344,7 @@ end function read_io_config
       ! Start at 10 to avoid standard units
       unit_id = 10
       do
-         inquire(unit=unit_id, opened=is_open)
+         inquire (unit=unit_id, opened=is_open)
          if (.not. is_open) return
          unit_id = unit_id + 1
       end do

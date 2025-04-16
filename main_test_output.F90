@@ -26,11 +26,11 @@ program main_test_output
    character(len=128) :: time_units, calendar
 
    ! Allocation of test fields
-   allocate(zeta(nx, ny))
-   allocate(temp(nx, ny, nz))
-   allocate(u(nx, ny))
-   allocate(v(nx, ny))
-   allocate(temp_profile(nz))
+   allocate (zeta(nx, ny))
+   allocate (temp(nx, ny, nz))
+   allocate (u(nx, ny))
+   allocate (v(nx, ny))
+   allocate (temp_profile(nz))
 
    ! Initialization for ocean variables
    zeta = 0.0
@@ -41,7 +41,7 @@ program main_test_output
    wind_speed = 0.0
 
    ! Initialize model variables and register them for output
-  ! call init_variables(nx, ny, nz)
+   ! call init_variables(nx, ny, nz)
 
    ! Calendar settings
    time_units = "seconds since 2023-01-01 00:00:00"
@@ -54,7 +54,6 @@ program main_test_output
    end if
 
    call init_variables(nx, ny, nz)
-
 
    ! Time loop
    do t = 1, nt
@@ -69,11 +68,10 @@ program main_test_output
       u = t                                   ! 2D field: x-velocity
       v = t*0.5                               ! 2D field: y-velocity
 
-
-        ! Debug pour le fichier spécifique
-   if (abs(current_time - 18000.0) < 10.0) then
-      print *, "At time ", current_time, " v(1,1) = ", v(1,1)
-   end if
+      ! Debug pour le fichier spécifique
+      if (abs(current_time - 18000.0) < 10.0) then
+         print *, "At time ", current_time, " v(1,1) = ", v(1, 1)
+      end if
 
       ! Check if this is the last time step
       if (t == nt) then
@@ -83,7 +81,7 @@ program main_test_output
          ! Write outputs during normal steps
          status = write_all_data(current_time)
       end if
-      
+
       if (status /= 0) then
          print *, "Warning: Write operation failed at time", current_time
       end if
@@ -96,7 +94,7 @@ program main_test_output
    end if
 
    ! Deallocate memory for model variables
-   deallocate(zeta, temp, u, v, temp_profile)
+   deallocate (zeta, temp, u, v, temp_profile)
 
    print *, "Test with multi-dimensional variables completed successfully!"
 
