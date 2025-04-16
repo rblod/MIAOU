@@ -1,0 +1,97 @@
++------------------------------------------+
+|             STRUCTURE DU CODE            |
++------------------------------------------+
+
++------------------------------------------+
+|           COUCHES PRINCIPALES            |
++------------------------------------------+
+
++---------------+       +---------------+       +---------------+
+|   DEFINITION  |       | CONFIGURATION |       |   OPÉRATIONS  |
+|  DES DONNÉES  | <---> |    D'E/S      | <---> |     D'E/S     |
++---------------+       +---------------+       +---------------+
+      ^                        ^                      ^
+      |                        |                      |
+      v                        v                      v
++---------------+       +---------------+       +---------------+
+|   REGISTRE    |       |  BACKEND     |       | IMPLEMENTATION|
+| DES VARIABLES | <---> |  ABSTRAIT    | <---> |    NETCDF     |
++---------------+       +---------------+       +---------------+
+
++------------------------------------------+
+|       DÉPENDANCES ENTRE MODULES          |
++------------------------------------------+
+
++--------------+     +--------------+     +--------------+
+| ocean_var.F90| <-- |var_registry.F90| <--|io_manager.F90|
++--------------+     +--------------+     +--------------+
+       ^                    ^                   ^
+       |                    |                   |
++--------------+     +--------------+     +--------------+
+|grid_module.F90| -->|io_definitions| -->|  io_config   |
++--------------+     +--------------+     +--------------+
+                           ^                   ^
+                           |                   |
+                     +--------------+     +--------------+
+                     |var_definitions| -->|  io_netcdf   |
+                     +--------------+     +--------------+
+                                               ^
+                                               |
+                     +--------------+     +--------------+
+                     |netcdf_utils  | -->|netcdf_backend|
+                     +--------------+     +--------------+
+                                               ^
+                                               |
+                                         +--------------+
+                                         |io_netcdf_avg |
+                                         +--------------+
+
++------------------------------------------+
+|             FLUX DES DONNÉES             |
++------------------------------------------+
+
+[Définition] --> [Registre] --> [Configuration] --> [Manager] --> [Backends] --> [Fichiers NC]
+  var_def        var_reg        io_config         io_manager     io_netcdf       *.nc
+                                                                io_netcdf_avg
+
++------------------------------------------+
+|         HIÉRARCHIE FONCTIONNELLE         |
++------------------------------------------+
+
+main_test_output.F90
+  |
+  +--> initialize_io() [io_manager]
+  |      |
+  |      +--> nc_initialize() [io_netcdf]
+  |      +--> read_io_config() [io_config]
+  |
+  +--> init_variables() [var_registry]
+  |      |
+  |      +--> create_*_grid() [grid_module]
+  |      +--> init_var_definitions() [var_definitions]
+  |            |
+  |            +--> define_*d_var() [var_definitions]
+  |      +--> register_variable() [io_manager]
+  |            |
+  |            +--> apply_config_to_variable() [io_config]
+  |
+  +--> write_all_data() [io_manager]
+         |
+         +--> create_output_files() [io_manager]
+         |      |
+         |      +--> generate_filename() [io_netcdf]
+         |      +--> nc_create_file() [io_netcdf]
+         |      +--> nc_define_variable_in_file() [io_netcdf]
+         |            |
+         |            +--> nc_define_variable() [netcdf_backend]
+         |      +--> nc_end_definition() [io_netcdf]
+         |
+         +--> accumulate_avg() [io_netcdf_avg]
+         +--> write_var_callback() [io_manager]
+               |
+               +--> belongs_to_file() [io_manager]
+               +--> nc_write_variable_data() [io_netcdf]
+               |      |
+               |      +--> nc_write_variable() [netcdf_backend]
+               +--> write_variable_avg() [io_netcdf_avg]
+               +--> nc_write_time() [io_netcdf]
