@@ -20,17 +20,6 @@ module io_netcdf_avg
    ! Public procedures
    public :: init_avg_buffers, accumulate_avg, write_variable_avg, reset_avg
 
-   ! Variable registry for averaging
-   type :: avg_var_info
-      character(len=32) :: name  !< Variable name
-      integer :: ndims           !< Number of dimensions
-      integer :: idx             !< Index in the corresponding buffer
-      integer :: size1           !< Size of first dimension (if applicable)
-      integer :: size2           !< Size of second dimension (if applicable)
-      integer :: size3           !< Size of third dimension (if applicable)
-      logical :: active          !< Whether averaging is active
-   end type avg_var_info
-
    ! Constants
    real, parameter :: TOLERANCE = 1.0e-5
 

@@ -350,24 +350,47 @@ contains
       end do
    end function get_free_unit
 
-   !> Handle errors in a centralized way
-   !>
-   !> @param[in] error_code  Type of error
-   !> @param[in] message     Error message
-   !> @param[in] iostatus    I/O error code
-   !> @param[in] details     Optional additional details
+!> Gestion centralisée des erreurs
+!>
+!> @param[in] error_code  Type d'erreur
+!> @param[in] message     Message d'erreur
+!> @param[in] iostatus    Code d'erreur I/O
+!> @param[in] details     Détails supplémentaires optionnels
    subroutine handle_error(error_code, message, iostatus, details)
       integer, intent(in) :: error_code, iostatus
       character(len=*), intent(in) :: message
       character(len=*), intent(in), optional :: details
 
+      ! Préfixe pour tous les messages d'erreur
+      character(len=8) :: prefix
+
+      ! Sélection du préfixe approprié en fonction du code d'erreur
       select case (error_code)
       case (FILE_NOT_FOUND)
-         print *, "WARNING: ", trim(message), " [Error code: ", iostatus, "]"
+         prefix = "WARNING"
+      case (NAMELIST_ERROR)
+         prefix = "WARNING"
+      case default
+         prefix = "ERROR"
+      end select
+
+      ! Affichage du message principal
+      print '(A,": ",A," [Error code: ",I0,"]")', prefix, trim(message), iostatus
+
+      ! Affichage des détails si présents
+      if (present(details)) then
+         print '(A,"     Details: ",A)', prefix, trim(details)
+      end if
+
+      ! Actions spécifiques selon le type d'erreur
+      select case (error_code)
+      case (FILE_NOT_FOUND)
          print *, "Using default values instead."
       case (NAMELIST_ERROR)
-         print *, "WARNING: ", trim(message), " [Error code: ", iostatus, "]"
-         if (present(details)) print *, "Details: ", trim(details)
+         ! Aucune action supplémentaire, le message a déjà été affiché
+      case default
+         ! Pour les erreurs critiques, on pourrait ajouter un stop ici
+         ! stop 1
       end select
    end subroutine handle_error
 

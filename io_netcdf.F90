@@ -38,22 +38,6 @@ module io_netcdf
       integer :: time_varid = -1  !< Time variable ID in the file
    end type netcdf_file
 
-   !> Extended variable with NetCDF-specific IDs
-   type, extends(io_variable) :: netcdf_var
-      !< NetCDF variable IDs for different file types
-      integer :: varid_his = -1  !< ID in history file
-      integer :: varid_avg = -1  !< ID in average file
-      integer :: varid_rst = -1  !< ID in restart file
-
-      !< Averaging buffers for average files
-      real, allocatable :: avg_buffer_1d(:)        !< For 1D
-      real, allocatable :: avg_buffer_2d(:, :)     !< For 2D
-      real, allocatable :: avg_buffer_3d(:, :, :)  !< For 3D
-
-      !< Memory management flag
-      logical :: owns_avg_buffers = .false.  !< Indicates if this instance owns its buffers
-   end type netcdf_var
-
    ! Registry of open files
    type(netcdf_file), allocatable :: open_files(:)
 
@@ -268,59 +252,53 @@ contains
    ! Variable operations
    !---------------------------------------------------------------------------
 
-   !> Define a variable in NetCDF file
-   !>
-   !> @param[in]     file_desc    File descriptor
-   !> @param[in]     var          Variable to define
-   !> @param[in]     file_type    Type of file ("his", "avg", or "rst")
-   !> @return        Status code (0 = success)
    function nc_define_variable_in_file(file_desc, var) result(status)
       type(file_descriptor), intent(in) :: file_desc
       type(io_variable), intent(in) :: var
       integer :: status
 
-      integer :: ncid, time_dimid, i
-      integer :: varid
+      integer :: ncid, time_dimid, varid
       type(axis) :: dummy_axis(1)
       type(axis), allocatable :: local_axes(:)
 
       status = -1
-
-      print *, "Defining variable '", trim(var%name), "' in file '", trim(file_desc%filename), "'"
-
-      ! Utiliser directement l'ID du backend
       ncid = file_desc%backend_id
 
-      ! Vérifier la validité
+      ! Vérifier la validité du fichier
       if (ncid <= 0) then
          print *, "Error: Invalid NetCDF file ID for: ", trim(file_desc%filename)
          return
       end if
 
-      ! Obtenir la dimension temps (généralement dimension 0)
+      ! Obtenir la dimension temps
       status = nf90_inquire(ncid, unlimitedDimId=time_dimid)
       if (status /= nf90_noerr) then
-         time_dimid = -1
          print *, "Warning: Could not find unlimited dimension in file: ", trim(file_desc%filename)
          return
       end if
 
-      ! Définir la variable selon sa dimensionnalité
-      if (var%ndims > 0 .and. allocated(var%var_grid%axes)) then
-         allocate (local_axes(size(var%var_grid%axes)))
-         do i = 1, size(var%var_grid%axes)
-            local_axes(i) = var%var_grid%axes(i)
-         end do
-
-         call nc_define_variable(ncid, var%ndims, var%name, var%long_name, var%units, &
-                                 local_axes, time_dimid, varid)
-
-         deallocate (local_axes)
-      else
-         ! Pour les variables scalaires
+      ! Traitement pour les variables scalaires
+      if (var%ndims == 0) then
+         ! Créer un axe fictif pour les scalaires
          dummy_axis(1) = create_axis("dummy", "Dummy dimension", "count", 1)
+
          call nc_define_variable(ncid, 0, var%name, var%long_name, var%units, &
                                  dummy_axis, time_dimid, varid)
+      else
+         ! Pour les variables à dimensions multiples
+         if (allocated(var%var_grid%axes)) then
+            allocate (local_axes(size(var%var_grid%axes)))
+            local_axes = var%var_grid%axes
+
+            call nc_define_variable(ncid, var%ndims, var%name, var%long_name, var%units, &
+                                    local_axes, time_dimid, varid)
+
+            deallocate (local_axes)
+         else
+            print *, "Warning: Variable ", trim(var%name), " has no axes defined"
+            status = -1
+            return
+         end if
       end if
 
       status = 0
