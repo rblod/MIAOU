@@ -28,7 +28,8 @@ contains
    subroutine init_avg_buffers(var)
       type(io_variable), intent(inout) :: var
 
-      if (var%avg_initialized) return  ! Déjà initialisé
+      ! Retourner immédiatement si déjà initialisé
+      if (var%avg_initialized) return
 
       select case (var%ndims)
       case (0)  ! Scalaire
@@ -63,7 +64,7 @@ contains
       if (.not. var%to_avg) return  ! Ne pas accumuler si non requis
 
       ! Initialiser les buffers si nécessaire
-      if (.not. var%avg_initialized) call init_avg_buffers(var)
+      call init_avg_buffers(var)
 
       ! Accumuler selon les dimensions
       select case (var%ndims)
@@ -94,7 +95,9 @@ contains
       integer :: status
 
       status = -1
-      if (.not. var%avg_initialized .or. var%avg_count == 0) return
+
+      call init_avg_buffers(var)
+      if (var%avg_count == 0) return  ! Rien à écrire si pas d'accumulation
 
       ! Calculer la moyenne et écrire
       select case (var%ndims)
@@ -120,7 +123,7 @@ contains
    subroutine reset_avg(var)
       type(io_variable), intent(inout) :: var
 
-      if (.not. var%avg_initialized) return
+      call init_avg_buffers(var)
 
       select case (var%ndims)
       case (0)  ! Scalaire

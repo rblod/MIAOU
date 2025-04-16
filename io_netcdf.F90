@@ -316,7 +316,6 @@ contains
       integer :: status
 
       integer :: ncid, varid, time_index
-      character(len=16) :: file_type
 
       status = -1
 
@@ -324,7 +323,6 @@ contains
       ncid = get_ncid_from_descriptor(file_desc)
       if (ncid < 0) return
 
-      file_type = get_file_type_from_ncid(ncid)
       time_index = get_time_index_from_ncid(ncid)
 
       ! Get variable ID in this file
@@ -466,27 +464,6 @@ contains
          end do
       end if
    end function get_time_index_from_ncid
-
-   !> Get file type for a file
-   !>
-   !> @param[in]  ncid  NetCDF file ID
-   !> @return     File type string or empty if not found
-   function get_file_type_from_ncid(ncid) result(file_type)
-      integer, intent(in) :: ncid
-      character(len=16) :: file_type
-      integer :: i
-
-      file_type = ""
-
-      if (allocated(open_files)) then
-         do i = 1, size(open_files)
-            if (open_files(i)%ncid == ncid) then
-               file_type = open_files(i)%type
-               return
-            end if
-         end do
-      end if
-   end function get_file_type_from_ncid
 
    !> Increment time index for a file
    !>

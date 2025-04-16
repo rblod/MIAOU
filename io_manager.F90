@@ -41,7 +41,54 @@ module io_manager
    character(len=256), private :: stored_time_units = "seconds since 2023-01-01 00:00:00"
    character(len=256), private :: stored_calendar = "gregorian"
 
+   ! Callback interface for processing open files
+   abstract interface
+      subroutine file_callback_interface(file_desc, file_idx)
+         import :: file_descriptor
+         type(file_descriptor), intent(in) :: file_desc
+         integer, intent(in) :: file_idx
+      end subroutine file_callback_interface
+   end interface
+
 contains
+
+   !---------------------------------------------------------------------------
+   ! File processing utilities
+   !---------------------------------------------------------------------------
+
+   !> Process all open files with a callback
+   !>
+   !> @param[in] callback  Procedure to call for each open file
+   subroutine process_open_files(callback)
+      procedure(file_callback_interface) :: callback
+      integer :: i
+
+      if (allocated(open_files)) then
+         do i = 1, size(open_files)
+            call callback(open_files(i), i)
+         end do
+      end if
+   end subroutine process_open_files
+
+   !> Check if any files are open
+   !>
+   !> @return True if files are open, false otherwise
+   function are_files_open() result(open_flag)
+      logical :: open_flag
+      open_flag = allocated(open_files) .and. size(open_files) > 0
+   end function are_files_open
+
+   !> Get number of open files
+   !>
+   !> @return Number of open files
+   function num_open_files() result(num)
+      integer :: num
+      if (allocated(open_files)) then
+         num = size(open_files)
+      else
+         num = 0
+      end if
+   end function num_open_files
 
    !---------------------------------------------------------------------------
    ! Initialization and cleanup
@@ -94,21 +141,31 @@ contains
       status = 0
    end function initialize_io
 
+   !> Callback for closing a file
+   !>
+   !> @param[in] file_desc  File descriptor
+   !> @param[in] file_idx   Index of the file (unused, for interface compatibility)
+   subroutine close_file_callback(file_desc, file_idx)
+      type(file_descriptor), intent(in) :: file_desc
+      integer, intent(in) :: file_idx  ! Unused, but kept for interface compatibility
+      integer :: status
+
+      status = nc_close_file(file_desc)
+      if (file_idx < 0) continue  ! Utilisation fictive pour éviter l'avertissement
+
+   end subroutine close_file_callback
+
    !> Finalize the I/O system
    !>
    !> @return Status code (0 = success)
    function finalize_io() result(status)
       integer :: status
-      integer :: i
 
-      ! Close all open files
-      if (allocated(open_files)) then
-         do i = 1, size(open_files)
-            status = nc_close_file(open_files(i))
-         end do
+      ! Close all open files using the callback
+      call process_open_files(close_file_callback)
 
-         deallocate (open_files)
-      end if
+      ! Free memory
+      if (allocated(open_files)) deallocate (open_files)
 
       ! Finalize NetCDF backend
       status = nc_finalize()
@@ -143,44 +200,80 @@ contains
    ! File operations
    !---------------------------------------------------------------------------
 
+   ! Cette fonction callback n'est pas utilisée actuellement mais peut être utile
+   ! pour des extensions futures du code
+   !
+   ! !> Callback for file existence check
+   ! !>
+   ! !> @param[in]    file_desc   File descriptor to check
+   ! !> @param[in]    file_idx    Index of the file
+   ! !> @param[inout] filename    Filename to check
+   ! !> @param[out]   exists      True if file exists
+   ! subroutine file_exists_callback(file_desc, file_idx, filename, exists)
+   !    type(file_descriptor), intent(in) :: file_desc
+   !    integer, intent(in) :: file_idx
+   !    character(len=*), intent(in) :: filename
+   !    logical, intent(out) :: exists
+   !
+   !    if (trim(file_desc%filename) == trim(filename)) then
+   !       exists = .true.
+   !    end if
+   ! end subroutine file_exists_callback
+
+   !> Check if a file exists in the registry
+   !>
+   !> @param[in] filename  Name of the file to check
+   !> @return    True if file exists, false otherwise
+   function file_exists(filename) result(exists)
+      character(len=*), intent(in) :: filename
+      logical :: exists
+      integer :: i
+
+      exists = .false.
+      if (allocated(open_files)) then
+         do i = 1, size(open_files)
+            if (trim(open_files(i)%filename) == trim(filename)) then
+               exists = .true.
+               exit
+            end if
+         end do
+      end if
+   end function file_exists
+
    !> Create all necessary output files for registered variables
+   !>
+   !> This function creates NetCDF output files for all registered variables
+   !> based on their output frequency and file type configuration. It also
+   !> defines all applicable variables in each created file, respecting
+   !> variable-specific prefixes and output settings.
    !>
    !> @param[in] time_units  Optional: units for time axis
    !> @param[in] calendar    Optional: calendar type for time
    !> @return    Number of files created
-!> Create all necessary output files for registered variables
-!>
-!> This function creates NetCDF output files for all registered variables
-!> based on their output frequency and file type configuration. It also
-!> defines all applicable variables in each created file.
-!>
-!> @param[in] time_units  Optional: units for time axis
-!> @param[in] calendar    Optional: calendar type for time
-!> @return    Number of files created
-!> Create all necessary output files for registered variables
-!>
-!> This function creates NetCDF output files for all registered variables
-!> based on their output frequency and file type configuration. It also
-!> defines all applicable variables in each created file, respecting
-!> variable-specific prefixes and output settings.
-!>
-!> @param[in] time_units  Optional: units for time axis
-!> @param[in] calendar    Optional: calendar type for time
-!> @return    Number of files created
    function create_output_files(time_units, calendar) result(num_files)
       character(len=*), intent(in), optional :: time_units, calendar
       integer :: num_files
 
-      integer :: i, j, var_idx, file_idx
+      integer :: i, j, var_idx
       integer :: status
       real :: freq
       character(len=256) :: filename
       character(len=128) :: expected_prefix
       type(io_variable) :: var
       type(file_descriptor) :: file_desc
-      logical :: file_exists
+      logical :: file_exists_flag
+      character(len=256) :: local_time_units, local_calendar
+      logical :: has_time_units, has_calendar
 
       num_files = 0
+
+      ! Determine if we have time units and calendar
+      has_time_units = present(time_units)
+      has_calendar = present(calendar) .and. has_time_units
+
+      ! Copy optional values if present
+      if (has_time_units) local_time_units = time_units
+      if (has_calendar) local_calendar = calendar
 
       ! For each variable in the registry
       do var_idx = 1, var_registry%size()
@@ -215,143 +308,65 @@ contains
                " -> ", trim(filename)
 
             ! Check if file already exists in our list
-            file_exists = .false.
-            if (allocated(open_files)) then
-               do file_idx = 1, size(open_files)
-                  if (trim(open_files(file_idx)%filename) == trim(filename)) then
-                     file_exists = .true.
-                     exit
-                  end if
-               end do
-            end if
+            file_exists_flag = file_exists(filename)
 
             ! If file doesn't exist, create it
-            if (.not. file_exists) then
+            if (.not. file_exists_flag) then
                print *, "Creating file: ", trim(filename), " for variable: ", trim(var%name)
 
-               ! Create NetCDF file with appropriate calendar settings
-               if (present(time_units) .and. present(calendar)) then
-                  if (nc_create_file(filename, FILE_TYPES(j), freq, time_units, calendar, file_desc) == 0) then
-                     ! Define all applicable variables in this file
-                     do i = 1, var_registry%size()
-                        var = var_registry%get(i)
-
-                        ! Determine expected prefix for this variable
-                        if (trim(var%file_prefix) /= "") then
-                           expected_prefix = trim(var%file_prefix)
-                        else
-                           expected_prefix = trim(get_output_prefix())
-                        end if
-
-                        ! Check if this variable belongs in this file
-                        if (index(filename, trim(expected_prefix)) /= 1) then
-                           cycle  ! Not a file for this variable
-                        end if
-
-                        ! Check if this variable should be written to this file type
-                        select case (trim(FILE_TYPES(j)))
-                        case ("his")
-                           if (.not. var%to_his) cycle
-                        case ("avg")
-                           if (.not. var%to_avg) cycle
-                        case ("rst")
-                           if (.not. var%to_rst) cycle
-                        end select
-
-                        ! Define the variable in the file
-                        status = nc_define_variable_in_file(file_desc, var)
-                        if (status /= 0) then
-                           print *, "Warning: Failed to define variable ", trim(var%name), " in file ", trim(filename)
-                        end if
-                     end do
-
-                     status = nc_end_definition(file_desc)
-                     call add_to_open_files(file_desc)
-                     num_files = num_files + 1
-                  end if
-               else if (present(time_units)) then
-                  if (nc_create_file(filename, FILE_TYPES(j), freq, time_units, file_desc=file_desc) == 0) then
-                     ! Define all applicable variables in this file
-                     do i = 1, var_registry%size()
-                        var = var_registry%get(i)
-
-                        ! Determine expected prefix for this variable
-                        if (trim(var%file_prefix) /= "") then
-                           expected_prefix = trim(var%file_prefix)
-                        else
-                           expected_prefix = trim(get_output_prefix())
-                        end if
-
-                        ! Check if this variable belongs in this file
-                        if (index(filename, trim(expected_prefix)) /= 1) then
-                           cycle  ! Not a file for this variable
-                        end if
-
-                        ! Check if this variable should be written to this file type
-                        select case (trim(FILE_TYPES(j)))
-                        case ("his")
-                           if (.not. var%to_his) cycle
-                        case ("avg")
-                           if (.not. var%to_avg) cycle
-                        case ("rst")
-                           if (.not. var%to_rst) cycle
-                        end select
-
-                        ! Define the variable in the file
-                        status = nc_define_variable_in_file(file_desc, var)
-                        if (status /= 0) then
-                           print *, "Warning: Failed to define variable ", trim(var%name), " in file ", trim(filename)
-                        end if
-                     end do
-
-                     status = nc_end_definition(file_desc)
-                     call add_to_open_files(file_desc)
-                     num_files = num_files + 1
-                  end if
+               ! Create NetCDF file with appropriate settings
+               status = -1
+               if (has_calendar) then
+                  status = nc_create_file(filename, FILE_TYPES(j), freq, local_time_units, local_calendar, file_desc)
+               else if (has_time_units) then
+                  status = nc_create_file(filename, FILE_TYPES(j), freq, local_time_units, file_desc=file_desc)
                else
-                  if (nc_create_file(filename, FILE_TYPES(j), freq, file_desc=file_desc) == 0) then
-                     ! Define all applicable variables in this file
-                     do i = 1, var_registry%size()
-                        var = var_registry%get(i)
+                  status = nc_create_file(filename, FILE_TYPES(j), freq, file_desc=file_desc)
+               end if
 
-                        ! Determine expected prefix for this variable
-                        if (trim(var%file_prefix) /= "") then
-                           expected_prefix = trim(var%file_prefix)
-                        else
-                           expected_prefix = trim(get_output_prefix())
-                        end if
+               if (status == 0) then
+                  ! Define all applicable variables in this file
+                  do i = 1, var_registry%size()
+                     var = var_registry%get(i)
 
-                        ! Check if this variable belongs in this file
-                        if (index(filename, trim(expected_prefix)) /= 1) then
-                           cycle  ! Not a file for this variable
-                        end if
+                     ! Determine expected prefix for this variable
+                     if (trim(var%file_prefix) /= "") then
+                        expected_prefix = trim(var%file_prefix)
+                     else
+                        expected_prefix = trim(get_output_prefix())
+                     end if
 
-                        ! Check if this variable should be written to this file type
-                        select case (trim(FILE_TYPES(j)))
-                        case ("his")
-                           if (.not. var%to_his) cycle
-                        case ("avg")
-                           if (.not. var%to_avg) cycle
-                        case ("rst")
-                           if (.not. var%to_rst) cycle
-                        end select
+                     ! Check if this variable belongs in this file
+                     if (index(filename, trim(expected_prefix)) /= 1) then
+                        cycle  ! Not a file for this variable
+                     end if
 
-                        ! Define the variable in the file
-                        status = nc_define_variable_in_file(file_desc, var)
-                        if (status /= 0) then
-                           print *, "Warning: Failed to define variable ", trim(var%name), " in file ", trim(filename)
-                        end if
-                     end do
+                     ! Check if this variable should be written to this file type
+                     select case (trim(FILE_TYPES(j)))
+                     case ("his")
+                        if (.not. var%to_his) cycle
+                     case ("avg")
+                        if (.not. var%to_avg) cycle
+                     case ("rst")
+                        if (.not. var%to_rst) cycle
+                     end select
 
-                     status = nc_end_definition(file_desc)
-                     call add_to_open_files(file_desc)
-                     num_files = num_files + 1
-                  end if
+                     ! Define the variable in the file
+                     status = nc_define_variable_in_file(file_desc, var)
+                     if (status /= 0) then
+                        print *, "Warning: Failed to define variable ", trim(var%name), " in file ", trim(filename)
+                     end if
+                  end do
+
+                  status = nc_end_definition(file_desc)
+                  call add_to_open_files(file_desc)
+                  num_files = num_files + 1
                end if
             end if
          end do
       end do
    end function create_output_files
+
    !> Add a file to the registry of open files
    !>
    !> @param[in] file_desc  File descriptor to add
@@ -421,6 +436,53 @@ contains
       end if
    end function write_data
 
+   !> Callback for writing variable to file
+   !>
+   !> @param[in] file_desc     File descriptor
+   !> @param[in] file_idx      Index of the file (unused, for interface compatibility)
+   !> @param[inout] var        Variable to write
+   !> @param[in] current_time  Current time (unused, for interface compatibility)
+   !> @param[in] is_final_step Flag indicating final step
+   !> @param[inout] any_written Set to true if any data was written
+   subroutine write_var_callback(file_desc, var, is_final_step, is_write_time, any_written)
+      type(file_descriptor), intent(in) :: file_desc
+      type(io_variable), intent(inout) :: var
+      logical, intent(in) :: is_final_step, is_write_time
+      logical, intent(inout) :: any_written
+
+      ! Check if this variable belongs to this file
+      if (belongs_to_file(var, file_desc)) then
+         ! Case 1: Final step restart files
+         if (is_final_step .and. trim(file_desc%type) == "rst" .and. var%to_rst) then
+            ! Write normal data
+            if (nc_write_variable_data(file_desc, var) == 0) any_written = .true.
+            ! Case 2: Regular write time
+         else if (is_write_time) then
+            select case (trim(file_desc%type))
+            case ("his")
+               if (var%to_his) then
+                  if (nc_write_variable_data(file_desc, var) == 0) any_written = .true.
+               end if
+            case ("avg")
+               if (var%to_avg) then
+                  ! Write average
+                  if (write_variable_avg(var, file_desc%backend_id, &
+                                         get_varid_for_variable(var, file_desc%backend_id), &
+                                         file_desc%time_index) == 0) then
+                     any_written = .true.
+                     ! Reset average after writing
+                     call reset_avg(var)
+                  end if
+               end if
+            case ("rst")
+               if (var%to_rst) then
+                  if (nc_write_variable_data(file_desc, var) == 0) any_written = .true.
+               end if
+            end select
+         end if
+      end if
+   end subroutine write_var_callback
+
    !> Write all registered variables at the current time
    !>
    !> @param[in] current_time  Current model time in seconds
@@ -433,15 +495,12 @@ contains
 
       integer :: var_idx, file_idx
       type(io_variable) :: var
-      logical :: final_step, any_written, is_avg_write_time
+      logical :: final_step, any_written
+      logical, allocatable :: is_write_time(:)
 
       status = 0
-
-      ! Check if this is the final time step
       final_step = .false.
-      if (present(is_final_step)) then
-         final_step = is_final_step
-      end if
+      if (present(is_final_step)) final_step = is_final_step
 
       ! Create output files if they don't exist yet
       if (.not. allocated(open_files)) then
@@ -452,86 +511,61 @@ contains
          end if
       end if
 
+      ! Pre-calculate write times for each file
+      if (allocated(open_files)) then  ! Utiliser allocated ici au lieu de are_files_open
+         allocate (is_write_time(size(open_files)))  ! Utiliser size directement
+
+         do file_idx = 1, size(open_files)  ! Utiliser size directement
+            ! For restart files, force writing on final step
+            if (trim(open_files(file_idx)%type) == "rst" .and. final_step) then
+               is_write_time(file_idx) = .true.
+            else
+               ! Calculate if it's time to write for this file
+               is_write_time(file_idx) = abs(mod(current_time, open_files(file_idx)%freq)) < TOLERANCE
+            end if
+         end do
+      end if
+
       ! First, accumulate averages for all variables
       do var_idx = 1, var_registry%size()
          var = var_registry%get(var_idx)
 
          ! Only accumulate for variables that need averages
-         if (var%to_avg) then
-            call accumulate_avg(var)
-         end if
+         if (var%to_avg) call accumulate_avg(var)
       end do
 
       ! Process all open files
-      if (allocated(open_files)) then
-         do file_idx = 1, size(open_files)
+      if (are_files_open()) then
+         do file_idx = 1, num_open_files()
             any_written = .false.
-
-            ! For restart files, force writing on final step
-            if (trim(open_files(file_idx)%type) == "rst" .and. final_step) then
-               any_written = .true.
-            end if
-
-            ! Check if it's time to write averages
-            is_avg_write_time = .false.
-            if (trim(open_files(file_idx)%type) == "avg") then
-               is_avg_write_time = abs(mod(current_time, open_files(file_idx)%freq)) < TOLERANCE
-            end if
 
             ! Process all variables for this file
             do var_idx = 1, var_registry%size()
                var = var_registry%get(var_idx)
 
-               ! Determine if this variable should be written to this file
-               if (should_write_to_file(var, open_files(file_idx), current_time) .or. &
-                   (final_step .and. trim(open_files(file_idx)%type) == "rst" .and. var%to_rst .and. &
-                    belongs_to_file(var, open_files(file_idx)))) then
-
-                  ! Write variable data
-                  if (trim(open_files(file_idx)%type) == "avg" .and. is_avg_write_time) then
-                     ! Écrire la moyenne
-                     if (write_variable_avg(var, open_files(file_idx)%backend_id, &
-                                            get_varid_for_variable(var, &
-                                                                   open_files(file_idx)%backend_id), &
-                                            open_files(file_idx)%time_index) == 0) then
-                        any_written = .true.
-
-                        ! Réinitialiser la moyenne après écriture
-                        call reset_avg(var)
-                     end if
-                  else
-                     ! Write normal data
-                     if (nc_write_variable_data(open_files(file_idx), var) == 0) then
-                        any_written = .true.
-                     end if
-                  end if
-               end if
+               ! Write variable if needed
+               call write_var_callback(open_files(file_idx), var, final_step, &
+                                       is_write_time(file_idx), any_written)
             end do
 
             ! Write time value if any variables were written
-            if (any_written) then
-               status = nc_write_time(open_files(file_idx), current_time)
-            end if
+            if (any_written) status = nc_write_time(open_files(file_idx), current_time)
          end do
+
+         deallocate (is_write_time)
       end if
    end function write_all_data
 
    !> Determine if a variable should be written to a file at the current time
    !>
+   !> This function checks if a variable should be written to a specific file
+   !> at the current model time, based on file prefix, output configuration,
+   !> and timing settings.
+   !>
    !> @param[in] var          Variable to check
    !> @param[in] file_desc    File descriptor
    !> @param[in] current_time Current model time
    !> @return    True if variable should be written to this file
-!> Determine if a variable should be written to a file at the current time
-!>
-!> This function checks if a variable should be written to a specific file
-!> at the current model time, based on file prefix, output configuration,
-!> and timing settings.
-!>
-!> @param[in] var          Variable to check
-!> @param[in] file_desc    File descriptor
-!> @param[in] current_time Current model time
-!> @return    True if variable should be written to this file
    function should_write_to_file(var, file_desc, current_time) result(should_write)
       type(io_variable), intent(in) :: var
       type(file_descriptor), intent(in) :: file_desc
@@ -539,21 +573,11 @@ contains
       logical :: should_write
 
       real :: freq
-      character(len=128) :: expected_prefix
 
       should_write = .false.
 
-      ! Determine expected prefix for this variable
-      if (trim(var%file_prefix) /= "") then
-         expected_prefix = trim(var%file_prefix)
-      else
-         expected_prefix = trim(get_output_prefix())
-      end if
-
-      ! Check if this variable belongs in this file
-      if (index(file_desc%filename, trim(expected_prefix)) /= 1) then
-         return  ! Not a file for this variable
-      end if
+      ! First check if the variable belongs to this file
+      if (.not. belongs_to_file(var, file_desc)) return
 
       ! Check if variable should be written to this file type
       select case (trim(file_desc%type))
@@ -585,47 +609,34 @@ contains
          end if
       else
          if (trim(file_desc%type) == "rst" .and. abs(current_time - file_desc%freq) < TOLERANCE) then
-            ! Spécial pour les fichiers de redémarrage - vérifiez si le temps actuel est exactement égal à la fréquence
+            ! Special for restart files - check if current time is exactly equal to frequency
             should_write = .true.
          else
             should_write = abs(mod(current_time, freq)) < TOLERANCE
          end if
       end if
-
-      ! Pour déboguer le problème spécifique
-      if (trim(file_desc%filename) == "special_rst_7200s.nc" .and. &
-          abs(current_time - 18000.0) < 10.0) then
-         print *, "Checking write for variable ", trim(var%name), " to file ", &
-            trim(file_desc%filename), " at time ", current_time
-         print *, "  Prefix match: ", index(file_desc%filename, trim(expected_prefix)) == 1
-         print *, "  File type: ", trim(file_desc%type), ", var.to_rst = ", var%to_rst
-         print *, "  Frequency: ", freq, ", mod(time,freq) = ", mod(current_time, freq)
-         print *, should_write
-         print *, abs(current_time - file_desc%freq)
-      end if
-
    end function should_write_to_file
 
-!> Check if a variable belongs to a file based on prefix
-!>
-!> @param[in] var        Variable to check
-!> @param[in] file_desc  File descriptor
-!> @return    True if the variable belongs to this file
+   !> Check if a variable belongs to a file based on prefix
+   !>
+   !> @param[in] var        Variable to check
+   !> @param[in] file_desc  File descriptor
+   !> @return    True if the variable belongs to this file
    function belongs_to_file(var, file_desc) result(belongs)
       type(io_variable), intent(in) :: var
       type(file_descriptor), intent(in) :: file_desc
       logical :: belongs
-      character(len=128) :: expected_prefix
+      character(len=128) :: prefix
 
       ! Determine expected prefix for this variable
       if (trim(var%file_prefix) /= "") then
-         expected_prefix = trim(var%file_prefix)
+         prefix = trim(var%file_prefix)
       else
-         expected_prefix = trim(get_output_prefix())
+         prefix = trim(get_output_prefix())
       end if
 
       ! Check if this file matches the expected prefix
-      belongs = (index(file_desc%filename, trim(expected_prefix)) == 1)
+      belongs = (index(file_desc%filename, trim(prefix)) == 1)
    end function belongs_to_file
 
 end module io_manager
