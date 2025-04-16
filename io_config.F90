@@ -145,7 +145,7 @@ contains
          call handle_error(NAMELIST_ERROR, "Error reading /output_vars/", ios, error_msg)
       end if
 
-! [après avoir lu var_configs...]
+      ! Print the read configurations for verification
       if (allocated(var_configs)) then
          print *, "Read ", size(var_configs), " variable configurations:"
          do i = 1, size(var_configs)
@@ -350,21 +350,21 @@ contains
       end do
    end function get_free_unit
 
-!> Gestion centralisée des erreurs
+!> Centralized error handling
 !>
-!> @param[in] error_code  Type d'erreur
-!> @param[in] message     Message d'erreur
-!> @param[in] iostatus    Code d'erreur I/O
-!> @param[in] details     Détails supplémentaires optionnels
+!> @param[in] error_code  Type of error
+!> @param[in] message     Error message
+!> @param[in] iostatus    I/O error code
+!> @param[in] details     Optional additional details
    subroutine handle_error(error_code, message, iostatus, details)
       integer, intent(in) :: error_code, iostatus
       character(len=*), intent(in) :: message
       character(len=*), intent(in), optional :: details
 
-      ! Préfixe pour tous les messages d'erreur
+      ! Prefix for all error messages
       character(len=8) :: prefix
 
-      ! Sélection du préfixe approprié en fonction du code d'erreur
+      ! Select appropriate prefix based on error code
       select case (error_code)
       case (FILE_NOT_FOUND)
          prefix = "WARNING"
@@ -374,22 +374,22 @@ contains
          prefix = "ERROR"
       end select
 
-      ! Affichage du message principal
+      ! Display main message
       print '(A,": ",A," [Error code: ",I0,"]")', prefix, trim(message), iostatus
 
-      ! Affichage des détails si présents
+      ! Display details if present
       if (present(details)) then
          print '(A,"     Details: ",A)', prefix, trim(details)
       end if
 
-      ! Actions spécifiques selon le type d'erreur
+      ! Specific actions based on error type
       select case (error_code)
       case (FILE_NOT_FOUND)
          print *, "Using default values instead."
       case (NAMELIST_ERROR)
-         ! Aucune action supplémentaire, le message a déjà été affiché
+         ! No additional action, message already displayed
       case default
-         ! Pour les erreurs critiques, on pourrait ajouter un stop ici
+         ! For critical errors, we could add a stop here
          ! stop 1
       end select
    end subroutine handle_error

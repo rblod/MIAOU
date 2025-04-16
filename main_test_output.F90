@@ -40,9 +40,6 @@ program main_test_output
    temp_profile = 0.0
    wind_speed = 0.0
 
-   ! Initialize model variables and register them for output
-   ! call init_variables(nx, ny, nz)
-
    ! Calendar settings
    time_units = "seconds since 2023-01-01 00:00:00"
    calendar = "gregorian"
@@ -68,7 +65,7 @@ program main_test_output
       u = t                                   ! 2D field: x-velocity
       v = t*0.5                               ! 2D field: y-velocity
 
-      ! Debug pour le fichier spécifique
+      ! Debug for the specific file
       if (abs(current_time - 18000.0) < 10.0) then
          print *, "At time ", current_time, " v(1,1) = ", v(1, 1)
       end if

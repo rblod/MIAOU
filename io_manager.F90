@@ -151,7 +151,8 @@ contains
       integer :: status
 
       status = nc_close_file(file_desc)
-      if (file_idx < 0) continue  ! Utilisation fictive pour éviter l'avertissement
+      ! Dummy use to avoid compiler warning
+      if (file_idx < 0) continue
 
    end subroutine close_file_callback
 
@@ -200,8 +201,8 @@ contains
    ! File operations
    !---------------------------------------------------------------------------
 
-   ! Cette fonction callback n'est pas utilisée actuellement mais peut être utile
-   ! pour des extensions futures du code
+   ! This callback function is not currently used but may be useful
+   ! for future code extensions
    !
    ! !> Callback for file existence check
    ! !>
@@ -512,10 +513,10 @@ contains
       end if
 
       ! Pre-calculate write times for each file
-      if (allocated(open_files)) then  ! Utiliser allocated ici au lieu de are_files_open
-         allocate (is_write_time(size(open_files)))  ! Utiliser size directement
+      if (allocated(open_files)) then
+         allocate (is_write_time(size(open_files)))
 
-         do file_idx = 1, size(open_files)  ! Utiliser size directement
+         do file_idx = 1, size(open_files)
             ! For restart files, force writing on final step
             if (trim(open_files(file_idx)%type) == "rst" .and. final_step) then
                is_write_time(file_idx) = .true.

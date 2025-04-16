@@ -25,14 +25,20 @@ module io_netcdf_avg
 
 contains
 
+   !> Initialize averaging buffers for a variable
+   !>
+   !> This subroutine allocates and initializes the averaging buffers
+   !> for a variable based on its dimensionality.
+   !>
+   !> @param[inout] var  Variable to initialize
    subroutine init_avg_buffers(var)
       type(io_variable), intent(inout) :: var
 
-      ! Retourner immédiatement si déjà initialisé
+      ! Return immediately if already initialized
       if (var%avg_initialized) return
 
       select case (var%ndims)
-      case (0)  ! Scalaire
+      case (0)  ! Scalar
          var%scalar_avg = 0.0
       case (1)  ! 1D
          if (associated(var%data_1d)) then
@@ -58,17 +64,22 @@ contains
       var%avg_initialized = .true.
    end subroutine init_avg_buffers
 
+   !> Accumulate variable values for averaging
+   !>
+   !> This subroutine adds the current value of a variable to its average accumulator.
+   !>
+   !> @param[inout] var  Variable to accumulate
    subroutine accumulate_avg(var)
       type(io_variable), intent(inout) :: var
 
-      if (.not. var%to_avg) return  ! Ne pas accumuler si non requis
+      if (.not. var%to_avg) return  ! Skip if averaging not required
 
-      ! Initialiser les buffers si nécessaire
+      ! Initialize buffers if needed
       call init_avg_buffers(var)
 
-      ! Accumuler selon les dimensions
+      ! Accumulate based on dimensions
       select case (var%ndims)
-      case (0)  ! Scalaire
+      case (0)  ! Scalar
          if (associated(var%scalar)) then
             var%scalar_avg = var%scalar_avg + var%scalar
          end if
@@ -89,6 +100,16 @@ contains
       var%avg_count = var%avg_count + 1
    end subroutine accumulate_avg
 
+   !> Write average variable data to a NetCDF file
+   !>
+   !> This function calculates the average value from accumulated data
+   !> and writes it to the specified variable in a NetCDF file.
+   !>
+   !> @param[inout] var        Variable containing accumulated data
+   !> @param[in]    ncid       NetCDF file ID
+   !> @param[in]    varid      Variable ID in the file
+   !> @param[in]    time_index Time index to write at
+   !> @return       Status code (0 = success)
    function write_variable_avg(var, ncid, varid, time_index) result(status)
       type(io_variable), intent(inout) :: var
       integer, intent(in) :: ncid, varid, time_index
@@ -97,11 +118,11 @@ contains
       status = -1
 
       call init_avg_buffers(var)
-      if (var%avg_count == 0) return  ! Rien à écrire si pas d'accumulation
+      if (var%avg_count == 0) return  ! Nothing to write if no accumulation
 
-      ! Calculer la moyenne et écrire
+      ! Calculate average and write
       select case (var%ndims)
-      case (0)  ! Scalaire
+      case (0)  ! Scalar
          call nc_write_variable(ncid, varid, var%scalar_avg/var%avg_count, time_index)
       case (1)  ! 1D
          if (allocated(var%data_avg_1d)) then
@@ -120,13 +141,19 @@ contains
       status = 0
    end function write_variable_avg
 
+   !> Reset averaging buffers for a variable
+   !>
+   !> This subroutine clears the averaging buffers and resets the
+   !> accumulation counter, typically after writing an average.
+   !>
+   !> @param[inout] var  Variable to reset
    subroutine reset_avg(var)
       type(io_variable), intent(inout) :: var
 
       call init_avg_buffers(var)
 
       select case (var%ndims)
-      case (0)  ! Scalaire
+      case (0)  ! Scalar
          var%scalar_avg = 0.0
       case (1)  ! 1D
          if (allocated(var%data_avg_1d)) var%data_avg_1d = 0.0

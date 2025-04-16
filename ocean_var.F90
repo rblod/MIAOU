@@ -1,3 +1,5 @@
+!===============================================================================
+!> @file ocean_var.F90
 !>
 !> Enhanced module with various model variables of different dimensions
 !>
@@ -7,7 +9,7 @@
 !>
 !> @author Rachid Benshila
 !> @date 2025-04-10
-!>
+!===============================================================================
 module ocean_var
    implicit none
    private

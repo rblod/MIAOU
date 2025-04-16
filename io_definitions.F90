@@ -26,34 +26,37 @@ module io_definitions
    !> It contains metadata and configuration for output operations,
    !> independent of the specific storage format.
    type :: io_variable
-      ! Champs existants
+      ! Basic metadata
       character(len=32) :: name
       character(len=64) :: long_name
       character(len=32) :: units
       type(grid) :: var_grid
       integer :: ndims = 0
 
+      ! Output flags
       logical :: to_his = .false.
       logical :: to_avg = .false.
       logical :: to_rst = .false.
 
+      ! Data pointers for different dimensionality
       real, pointer :: scalar => null()
       real, pointer :: data_1d(:) => null()
       real, pointer :: data_2d(:, :) => null()
       real, pointer :: data_3d(:, :, :) => null()
 
+      ! Output frequency settings
       real :: freq_his = -1.
       real :: freq_avg = -1.
       real :: freq_rst = -1.
       character(len=128) :: file_prefix = ""
 
-      ! Nouveaux champs pour l'accumulation des moyennes
-      real :: scalar_avg = 0.0                      ! Pour les scalaires (0D)
-      real, allocatable :: data_avg_1d(:)           ! Pour les tableaux 1D
-      real, allocatable :: data_avg_2d(:, :)        ! Pour les tableaux 2D
-      real, allocatable :: data_avg_3d(:, :, :)     ! Pour les tableaux 3D
-      integer :: avg_count = 0                      ! Compteur pour le nombre d'accumulations
-      logical :: avg_initialized = .false.          ! Flag pour marquer si les buffers sont initialisés
+      ! Fields for average accumulation
+      real :: scalar_avg = 0.0                      ! For scalar (0D) values
+      real, allocatable :: data_avg_1d(:)           ! For 1D arrays
+      real, allocatable :: data_avg_2d(:, :)        ! For 2D arrays
+      real, allocatable :: data_avg_3d(:, :, :)     ! For 3D arrays
+      integer :: avg_count = 0                      ! Counter for number of accumulations
+      logical :: avg_initialized = .false.          ! Flag indicating if buffers are initialized
    end type io_variable
 
    !> @type file_descriptor

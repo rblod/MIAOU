@@ -125,7 +125,6 @@ contains
                     "Create time dimension")
 
       ! Create time variable if units provided
-      ! Create time variable if units provided
       if (present(time_units)) then
          call nc_check(nf90_def_var(ncid, "time", nf90_real, [nc_file%time_dimid], &
                                     nc_file%time_varid))
@@ -252,6 +251,14 @@ contains
    ! Variable operations
    !---------------------------------------------------------------------------
 
+   !> Define a variable in a NetCDF file
+   !>
+   !> This function creates dimensions and defines a variable in a NetCDF file
+   !> based on the variable's metadata and dimensionality.
+   !>
+   !> @param[in] file_desc  File descriptor
+   !> @param[in] var        Variable to define
+   !> @return    Status code (0 = success)
    function nc_define_variable_in_file(file_desc, var) result(status)
       type(file_descriptor), intent(in) :: file_desc
       type(io_variable), intent(in) :: var
@@ -264,28 +271,28 @@ contains
       status = -1
       ncid = file_desc%backend_id
 
-      ! Vérifier la validité du fichier
+      ! Check file validity
       if (ncid <= 0) then
          print *, "Error: Invalid NetCDF file ID for: ", trim(file_desc%filename)
          return
       end if
 
-      ! Obtenir la dimension temps
+      ! Get time dimension
       status = nf90_inquire(ncid, unlimitedDimId=time_dimid)
       if (status /= nf90_noerr) then
          print *, "Warning: Could not find unlimited dimension in file: ", trim(file_desc%filename)
          return
       end if
 
-      ! Traitement pour les variables scalaires
+      ! Special case for scalar variables
       if (var%ndims == 0) then
-         ! Créer un axe fictif pour les scalaires
+         ! Create a dummy axis for scalars
          dummy_axis(1) = create_axis("dummy", "Dummy dimension", "count", 1)
 
          call nc_define_variable(ncid, 0, var%name, var%long_name, var%units, &
                                  dummy_axis, time_dimid, varid)
       else
-         ! Pour les variables à dimensions multiples
+         ! For variables with multiple dimensions
          if (allocated(var%var_grid%axes)) then
             allocate (local_axes(size(var%var_grid%axes)))
             local_axes = var%var_grid%axes
@@ -308,7 +315,6 @@ contains
    !>
    !> @param[in]     file_desc    File descriptor
    !> @param[in]     var          Variable to write
-   !> @param[in]     time_value   Current time value
    !> @return        Status code (0 = success)
    function nc_write_variable_data(file_desc, var) result(status)
       type(file_descriptor), intent(in) :: file_desc
@@ -482,11 +488,10 @@ contains
       end if
    end subroutine increment_time_index
 
-   !> Get NetCDF variable ID for a variable in a specific file type
+   !> Get NetCDF variable ID for a variable in a file
    !>
-   !> @param[in]  var        Variable to check
-   !> @param[in]  file_type  Type of file ("his", "avg", or "rst")
-   !> @param[in]  ncid       NetCDF file ID
+   !> @param[in]  var   Variable to check
+   !> @param[in]  ncid  NetCDF file ID
    !> @return     Variable ID or -1 if not found
    function get_varid_for_variable(var, ncid) result(varid)
       type(io_variable), intent(in) :: var
@@ -504,6 +509,10 @@ contains
       varid = -1
    end function get_varid_for_variable
 
+   !> End definition mode for a NetCDF file
+   !>
+   !> @param[in]  file_desc  File descriptor
+   !> @return     Status code (0 = success)
    function nc_end_definition(file_desc) result(status)
       type(file_descriptor), intent(in) :: file_desc
       integer :: status
