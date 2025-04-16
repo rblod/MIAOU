@@ -18,7 +18,7 @@ module netcdf_backend
    private
 
    ! Public interface
-   public :: nc_check, nc_define_variable, nc_write_variable
+   public :: nc_define_variable, nc_write_variable
 
    !> Generic interface for writing variables of different dimensions
    !>

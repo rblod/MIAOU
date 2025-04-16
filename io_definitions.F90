@@ -27,36 +27,36 @@ module io_definitions
    !> independent of the specific storage format.
    type :: io_variable
       ! Basic metadata
-      character(len=32) :: name
-      character(len=64) :: long_name
-      character(len=32) :: units
-      type(grid) :: var_grid
-      integer :: ndims = 0
+      character(len=32) :: name       !< short name
+      character(len=64) :: long_name  !< long name
+      character(len=32) :: units      !< unit
+      type(grid) :: var_grid          !< associated grid
+      integer :: ndims = 0            !< number of dimensions
 
       ! Output flags
-      logical :: to_his = .false.
-      logical :: to_avg = .false.
-      logical :: to_rst = .false.
+      logical :: to_his = .false.     !< write to history
+      logical :: to_avg = .false.     !< write to average  
+      logical :: to_rst = .false.     ! write to restart 
 
       ! Data pointers for different dimensionality
-      real, pointer :: scalar => null()
-      real, pointer :: data_1d(:) => null()
-      real, pointer :: data_2d(:, :) => null()
-      real, pointer :: data_3d(:, :, :) => null()
+      real, pointer :: scalar => null()             !< scalar data
+      real, pointer :: data_1d(:) => null()         !< 1D data 
+      real, pointer :: data_2d(:, :) => null()      !< 2D data
+      real, pointer :: data_3d(:, :, :) => null()   !< 3D data
 
       ! Output frequency settings
-      real :: freq_his = -1.
-      real :: freq_avg = -1.
-      real :: freq_rst = -1.
-      character(len=128) :: file_prefix = ""
+      real :: freq_his = -1.                  !< history frequency
+      real :: freq_avg = -1.                  !< average frequency
+      real :: freq_rst = -1.                  !< restart frequency
+      character(len=128) :: file_prefix = ""  !< file prefix
 
       ! Fields for average accumulation
-      real :: scalar_avg = 0.0                      ! For scalar (0D) values
-      real, allocatable :: data_avg_1d(:)           ! For 1D arrays
-      real, allocatable :: data_avg_2d(:, :)        ! For 2D arrays
-      real, allocatable :: data_avg_3d(:, :, :)     ! For 3D arrays
-      integer :: avg_count = 0                      ! Counter for number of accumulations
-      logical :: avg_initialized = .false.          ! Flag indicating if buffers are initialized
+      real :: scalar_avg = 0.0                      !< average buffer for scalar (0D) values
+      real, allocatable :: data_avg_1d(:)           !< average buffer for 1D arrays
+      real, allocatable :: data_avg_2d(:, :)        !< average buffer for 2D arrays
+      real, allocatable :: data_avg_3d(:, :, :)     !< average buffer for 3D arrays
+      integer :: avg_count = 0                      !< Counter for number of accumulations
+      logical :: avg_initialized = .false.          !< Flag indicating if buffers are initialized
    end type io_variable
 
    !> @type file_descriptor
