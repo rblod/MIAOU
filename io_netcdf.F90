@@ -200,22 +200,22 @@ contains
       end if
 
       ! Special case for scalar variables
-      if (var%ndims == 0) then
+      if (var%meta%ndims == 0) then
          dummy_axis(1) = create_axis("dummy", "Dummy dimension", "count", 1)
-         call nc_define_variable(ncid, 0, var%name, var%long_name, var%units, &
+         call nc_define_variable(ncid, 0, var%meta%name, var%meta%long_name, var%meta%units, &
                                  dummy_axis, file_desc%time_dimid, varid)
       else
          ! For variables with dimensions
-         if (allocated(var%var_grid%axes)) then
-            allocate (local_axes(size(var%var_grid%axes)))
-            local_axes = var%var_grid%axes
+         if (allocated(var%meta%var_grid%axes)) then
+            allocate(local_axes(size(var%meta%var_grid%axes)))
+            local_axes = var%meta%var_grid%axes
 
-            call nc_define_variable(ncid, var%ndims, var%name, var%long_name, var%units, &
-                                    local_axes, file_desc%time_dimid, varid)
+            call nc_define_variable(ncid, var%meta%ndims, var%meta%name, var%meta%long_name, &
+                                    var%meta%units, local_axes, file_desc%time_dimid, varid)
 
-            deallocate (local_axes)
+            deallocate(local_axes)
          else
-            print *, "WARNING: Variable ", trim(var%name), " has no axes defined"
+            print *, "WARNING: Variable ", trim(var%meta%name), " has no axes defined"
             return
          end if
       end if
@@ -262,7 +262,7 @@ contains
       ncid = file_desc%backend_id
       
       if (ncid <= 0) then
-         print *, "ERROR: Invalid file for writing: ", trim(var%name)
+         print *, "ERROR: Invalid file for writing: ", trim(var%meta%name)
          return
       end if
 
@@ -271,30 +271,30 @@ contains
       ! Get variable ID in this file
       varid = get_varid_for_variable(var, ncid)
       if (varid <= 0) then
-         print *, "WARNING: Variable ", trim(var%name), " not defined in file"
+         print *, "WARNING: Variable ", trim(var%meta%name), " not defined in file"
          return
       end if
 
       ! Write the variable data based on dimension
-      select case (var%ndims)
+      select case (var%meta%ndims)
       case (0)  ! Scalar
-         if (associated(var%scalar)) then
-            call nc_write_variable(ncid, varid, var%scalar, time_index)
+         if (var%data%is_valid(0)) then
+            call nc_write_variable(ncid, varid, var%data%scalar, time_index)
             status = 0
          end if
       case (1)  ! 1D array
-         if (associated(var%data_1d)) then
-            call nc_write_variable(ncid, varid, var%data_1d, time_index)
+         if (var%data%is_valid(1)) then
+            call nc_write_variable(ncid, varid, var%data%d1, time_index)
             status = 0
          end if
       case (2)  ! 2D array
-         if (associated(var%data_2d)) then
-            call nc_write_variable(ncid, varid, var%data_2d, time_index)
+         if (var%data%is_valid(2)) then
+            call nc_write_variable(ncid, varid, var%data%d2, time_index)
             status = 0
          end if
       case (3)  ! 3D array
-         if (associated(var%data_3d)) then
-            call nc_write_variable(ncid, varid, var%data_3d, time_index)
+         if (var%data%is_valid(3)) then
+            call nc_write_variable(ncid, varid, var%data%d3, time_index)
             status = 0
          end if
       end select
@@ -356,7 +356,7 @@ contains
       integer, intent(in) :: ncid
       integer :: varid
 
-      if (nf90_inq_varid(ncid, trim(var%name), varid) /= nf90_noerr) then
+      if (nf90_inq_varid(ncid, trim(var%meta%name), varid) /= nf90_noerr) then
          varid = -1
       end if
    end function get_varid_for_variable

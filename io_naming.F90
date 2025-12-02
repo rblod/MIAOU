@@ -104,7 +104,7 @@ contains
       character(len=*), intent(out) :: extension
       logical :: success
 
-      integer :: pos_dot, pos_last_us, pos_second_us
+      integer :: pos_dot, pos_last_us
       integer :: freq_int, ios
       character(len=IO_PATH_LEN) :: basename, freq_part
 

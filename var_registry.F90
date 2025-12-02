@@ -95,9 +95,9 @@ contains
       ! Register all variables with the I/O system
       do i = 1, num_vars
          ! Print debugging information
-         print *, "Registering variable:", trim(model_vars(i)%name)
-         print *, "  Grid name:", trim(model_vars(i)%var_grid%name)
-         print *, "  Dimensions:", model_vars(i)%ndims
+         print *, "Registering variable:", trim(model_vars(i)%meta%name)
+         print *, "  Grid name:", trim(model_vars(i)%meta%var_grid%name)
+         print *, "  Dimensions:", model_vars(i)%meta%ndims
 
          ! Register the variable for output
          call register_variable(model_vars(i))

@@ -387,7 +387,7 @@ contains
          ! Define the variable in the file
          status = nc_define_variable_in_file(file_desc, var_ptr)
          if (status /= 0) then
-            print *, "Warning: Failed to define variable ", trim(var_ptr%name), &
+            print *, "Warning: Failed to define variable ", trim(var_ptr%meta%name), &
                      " in file ", trim(file_desc%filename)
          end if
       end do

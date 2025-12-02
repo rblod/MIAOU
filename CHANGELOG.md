@@ -1,5 +1,81 @@
 # MIAOU - Changelog
 
+## Version 0.6.0 - 2025-04
+
+### Summary
+
+Major refactoring using composition to decompose `io_variable` into specialized types.
+
+---
+
+### 8. Composition of io_variable
+
+**Problem:**  
+`io_variable` was a monolithic type with ~20 fields handling multiple concerns:
+metadata, data pointers, output configuration, and averaging buffers.
+
+**Solution:**  
+Decomposed into specialized types using composition:
+
+```fortran
+type :: io_variable
+   type(var_metadata) :: meta    ! Name, units, grid, ndims
+   type(var_data_ptr) :: data    ! Pointers to actual data
+   type(avg_buffer) :: avg       ! Averaging state
+   type(output_stream) :: streams(3)  ! Output configuration
+end type
+```
+
+**New types:**
+
+| Type | Responsibility | Methods |
+|------|----------------|---------|
+| `var_metadata` | Variable identification | (data only) |
+| `var_data_ptr` | Data pointers | `is_valid()`, `get_shape()`, `nullify_all()` |
+| `avg_buffer` | Averaging buffers | `init()`, `accumulate_*()`, `compute_*()`, `reset()`, `is_ready()`, `get_count()` |
+
+**Updated `io_variable` methods:**
+- `has_output()` — Any stream active?
+- `needs_averaging()` — Is AVG stream active?
+- `get_prefix()` — Get prefix for a stream
+- `init_avg()` — Initialize averaging buffers from data shape
+- `accumulate()` — Accumulate current data for averaging
+
+**Access pattern changes:**
+
+| Before | After |
+|--------|-------|
+| `var%name` | `var%meta%name` |
+| `var%units` | `var%meta%units` |
+| `var%ndims` | `var%meta%ndims` |
+| `var%var_grid` | `var%meta%var_grid` |
+| `var%scalar` | `var%data%scalar` |
+| `var%data_1d` | `var%data%d1` |
+| `var%data_2d` | `var%data%d2` |
+| `var%data_3d` | `var%data%d3` |
+| `var%avg_count` | `var%avg%count` |
+| `var%scalar_avg` | `var%avg%scalar` |
+| `associated(var%data_2d)` | `var%data%is_valid(2)` |
+
+**Benefits:**
+- Each type has a single responsibility
+- Averaging logic encapsulated in `avg_buffer` with clean methods
+- Data pointer validation via `is_valid()` method
+- Shape retrieval via `get_shape()` method
+- Types can be tested and reused independently
+- Clearer code organization
+
+**Files modified:**
+- `io_definitions.F90` — New types with methods
+- `io_averaging.F90` — Simplified to wrappers calling variable methods
+- `io_netcdf_avg.F90` — Uses `var%avg` methods
+- `io_netcdf.F90` — Uses `var%meta` and `var%data`
+- `io_config.F90` — Uses `var%meta%name`
+- `io_manager.F90` — Uses `var%meta%name`
+- `var_definitions.F90` — Uses `var%meta` and `var%data`
+
+---
+
 ## Version 0.5.0 - 2025-04
 
 ### Summary

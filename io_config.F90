@@ -212,12 +212,12 @@ contains
       ! Look for this variable in the configurations
       if (allocated(var_configs)) then
          do i = 1, size(var_configs)
-            if (trim(var_configs(i)%name) == trim(var%name)) then
+            if (trim(var_configs(i)%name) == trim(var%meta%name)) then
                ! Found - apply the configuration
                call apply_specific_config(var, var_configs(i))
                found = .true.
 
-               print *, "Applied specific config for: ", trim(var%name), &
+               print *, "Applied specific config for: ", trim(var%meta%name), &
                   " his=", var%streams(STREAM_HIS)%enabled, &
                   " avg=", var%streams(STREAM_AVG)%enabled, &
                   " rst=", var%streams(STREAM_RST)%enabled
