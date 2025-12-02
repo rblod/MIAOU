@@ -1,10 +1,59 @@
 # MIAOU - Changelog
 
+## Version 0.4.0 - 2025-04
+
+### Summary
+
+Decoupling of the averaging module to separate generic logic from backend-specific implementation.
+
+---
+
+### 6. Decoupled averaging module
+
+**Problem:**  
+`io_netcdf_avg.F90` mixed two responsibilities:
+- Generic averaging logic (buffer management, accumulation, average computation)
+- NetCDF-specific writing
+
+This made it impossible to reuse the averaging logic with other backends.
+
+**Solution:**  
+Split into two modules:
+
+| Module | Responsibility |
+|--------|----------------|
+| `io_averaging.F90` | Generic averaging: buffer init, accumulation, reset, computation |
+| `io_netcdf_avg.F90` | NetCDF writing only, delegates averaging to `io_averaging` |
+
+**New file: `io_averaging.F90`**
+
+Public interface:
+- `avg_init_buffers(var_ptr)` — Initialize averaging buffers
+- `avg_accumulate(var_ptr)` — Add current values to accumulator
+- `avg_reset(var_ptr)` — Reset buffers after writing
+- `avg_get_count(var_ptr)` — Get number of accumulated values
+- `avg_is_ready(var_ptr)` — Check if average is ready to write
+- `avg_compute_scalar/1d/2d/3d(var_ptr, avg_data)` — Compute and return average
+
+**Modified file: `io_netcdf_avg.F90`**
+
+Now only contains:
+- `accumulate_avg()` — Wrapper delegating to `avg_accumulate()`
+- `reset_avg()` — Wrapper delegating to `avg_reset()`
+- `write_variable_avg()` — Computes average via `io_averaging`, writes to NetCDF
+
+**Benefits:**
+- Averaging logic can be reused by HDF5, Zarr, or other backends
+- Easier unit testing of averaging logic
+- Clear separation of concerns
+
+---
+
 ## Version 0.3.0 - 2025-04
 
-### Résumé
+### Summary
 
-Amélioration de la modularité avec centralisation des constantes et extraction de la logique de nommage des fichiers.
+Improved modularity with centralized constants and file naming extraction.
 
 ---
 
