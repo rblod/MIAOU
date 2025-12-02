@@ -62,16 +62,25 @@ module io_definitions
    !> @type file_descriptor
    !> Descriptor for an output file
    !>
-   !> This type provides a backend-independent description of an output file,
-   !> containing information about its type, frequency, and other metadata.
+   !> This type provides a complete description of an output file,
+   !> containing information about its type, frequency, and backend-specific
+   !> metadata. All file state is centralized here to avoid duplication.
    type :: file_descriptor
-      character(len=256) :: filename  !< Complete filename
-      character(len=16) :: type       !< "his" (history), "avg" (average), or "rst" (restart)
-      real :: freq                    !< Write frequency (seconds)
-      integer :: time_index = 1       !< Current time write index
+      ! Core file information
+      character(len=256) :: filename = ""   !< Complete filename
+      character(len=16) :: type = ""        !< "his" (history), "avg" (average), or "rst" (restart)
+      real :: freq = -1.0                   !< Write frequency (seconds)
+      integer :: time_index = 1             !< Current time write index
 
-      ! Backend-specific identifiers can be added by the implementation
-      integer :: backend_id = -1      !< ID in the backend system (e.g., NetCDF ncid)
+      ! Backend-specific identifiers (NetCDF)
+      integer :: backend_id = -1            !< Backend file ID (e.g., NetCDF ncid)
+      integer :: time_dimid = -1            !< Time dimension ID in the file
+      integer :: time_varid = -1            !< Time variable ID in the file
+   contains
+      !> Increment time index after writing
+      procedure :: increment_time => file_increment_time
+      !> Check if file is valid/open
+      procedure :: is_open => file_is_open
    end type file_descriptor
 
    !> @type io_var_registry
@@ -94,11 +103,38 @@ module io_definitions
       !> Get the number of registered variables
       procedure :: size => registry_size
 
-      !> Get a variable by index
+      !> Get a variable by index (returns a copy)
       procedure :: get => registry_get_variable
+      
+      !> Get a pointer to a variable by index (for modification)
+      procedure :: get_ptr => registry_get_variable_ptr
+      
+      !> Update a variable in the registry
+      procedure :: update => registry_update_variable
    end type io_var_registry
 
 contains
+
+   !---------------------------------------------------------------------------
+   ! file_descriptor methods
+   !---------------------------------------------------------------------------
+
+   !> Increment the time index for a file
+   subroutine file_increment_time(this)
+      class(file_descriptor), intent(inout) :: this
+      this%time_index = this%time_index + 1
+   end subroutine file_increment_time
+
+   !> Check if a file is open/valid
+   function file_is_open(this) result(is_open)
+      class(file_descriptor), intent(in) :: this
+      logical :: is_open
+      is_open = (this%backend_id > 0)
+   end function file_is_open
+
+   !---------------------------------------------------------------------------
+   ! io_var_registry methods
+   !---------------------------------------------------------------------------
 
    !> Add a variable to the registry
    !>
@@ -183,7 +219,7 @@ contains
       sz = this%count
    end function registry_size
 
-   !> Get a variable by index
+   !> Get a variable by index (returns a copy)
    !>
    !> @param[in]  this  The registry to query
    !> @param[in]  idx   Index of the variable to retrieve
@@ -199,5 +235,37 @@ contains
          var%name = ""  ! Mark as invalid
       end if
    end function registry_get_variable
+
+   !> Get a pointer to a variable by index (for modification)
+   !>
+   !> @param[inout] this  The registry to query
+   !> @param[in]    idx   Index of the variable to retrieve
+   !> @return       Pointer to the variable, or null if invalid index
+   function registry_get_variable_ptr(this, idx) result(var_ptr)
+      class(io_var_registry), intent(inout), target :: this
+      integer, intent(in) :: idx
+      type(io_variable), pointer :: var_ptr
+
+      if (allocated(this%variables) .and. idx > 0 .and. idx <= this%count) then
+         var_ptr => this%variables(idx)
+      else
+         nullify(var_ptr)
+      end if
+   end function registry_get_variable_ptr
+
+   !> Update a variable in the registry
+   !>
+   !> @param[inout] this  The registry to modify
+   !> @param[in]    idx   Index of the variable to update
+   !> @param[in]    var   New variable data
+   subroutine registry_update_variable(this, idx, var)
+      class(io_var_registry), intent(inout) :: this
+      integer, intent(in) :: idx
+      type(io_variable), intent(in) :: var
+
+      if (allocated(this%variables) .and. idx > 0 .and. idx <= this%count) then
+         this%variables(idx) = var
+      end if
+   end subroutine registry_update_variable
 
 end module io_definitions

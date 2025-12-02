@@ -7,6 +7,9 @@
 !> It handles file creation, variable definition, and data writing using the
 !> NetCDF library.
 !>
+!> REFACTORED: Removed duplicate file registry. All file state is now managed
+!> through file_descriptor passed from io_manager.
+!>
 !> @author Rachid Benshila
 !> @date 2025-04-11
 !===============================================================================
@@ -15,7 +18,7 @@ module io_netcdf
    use netcdf_utils, only: nc_check
    use netcdf_backend, only: nc_define_variable, nc_write_variable
    use grid_module, only: grid, axis, create_axis
-   use io_definitions, only: io_variable, file_descriptor, io_var_registry
+   use io_definitions, only: io_variable, file_descriptor
    use io_config, only: get_output_prefix
    implicit none
    private
@@ -27,19 +30,8 @@ module io_netcdf
    public :: generate_filename, nc_define_variable_in_file
    public :: nc_end_definition, get_varid_for_variable
 
-   ! Constants
-   real, parameter :: TOLERANCE = 1.0e-5
-
-   ! Internal types for NetCDF implementation
-   !> Extended file descriptor with NetCDF-specific information
-   type, extends(file_descriptor) :: netcdf_file
-      integer :: ncid = -1        !< NetCDF file ID
-      integer :: time_dimid = -1  !< Time dimension ID in the file
-      integer :: time_varid = -1  !< Time variable ID in the file
-   end type netcdf_file
-
-   ! Registry of open files
-   type(netcdf_file), allocatable :: open_files(:)
+   ! Module state
+   logical, private :: is_initialized = .false.
 
 contains
 
@@ -53,37 +45,21 @@ contains
    function nc_initialize() result(status)
       integer :: status
 
-      status = 0
-
-      ! Initialize file registry
-      if (allocated(open_files)) deallocate (open_files)
-
-      ! Success
+      is_initialized = .true.
       status = 0
    end function nc_initialize
 
    !> Finalize the NetCDF I/O system
    !>
-   !> This function closes all open files and releases resources.
+   !> Note: File closing is now handled by io_manager calling nc_close_file
+   !> for each file. This function just cleans up module state.
    !>
    !> @return Status code (0 = success)
    function nc_finalize() result(status)
       integer :: status
-      integer :: i
 
+      is_initialized = .false.
       status = 0
-
-      ! Close all open files
-      if (allocated(open_files)) then
-         do i = 1, size(open_files)
-            if (open_files(i)%ncid > 0) then
-               call nc_check(nf90_close(open_files(i)%ncid))
-               print *, "Closed file: ", trim(open_files(i)%filename)
-            end if
-         end do
-
-         deallocate (open_files)
-      end if
    end function nc_finalize
 
    !---------------------------------------------------------------------------
@@ -92,126 +68,102 @@ contains
 
    !> Create a NetCDF output file
    !>
-   !> @param[in]  filename     Path to the file
-   !> @param[in]  file_type    Type of file ("his", "avg", or "rst")
-   !> @param[in]  freq         Output frequency in seconds
-   !> @param[in]  time_units   Optional: time units
-   !> @param[in]  calendar     Optional: calendar type
-   !> @param[out] file_desc    File descriptor for the created file
-   !> @return     Status code (0 = success)
+   !> @param[in]     filename     Path to the file
+   !> @param[in]     file_type    Type of file ("his", "avg", or "rst")
+   !> @param[in]     freq         Output frequency in seconds
+   !> @param[in]     time_units   Optional: time units
+   !> @param[in]     calendar     Optional: calendar type
+   !> @param[inout]  file_desc    File descriptor (populated on success)
+   !> @return        Status code (0 = success)
    function nc_create_file(filename, file_type, freq, time_units, calendar, file_desc) result(status)
       character(len=*), intent(in) :: filename, file_type
       real, intent(in) :: freq
       character(len=*), intent(in), optional :: time_units, calendar
-      type(file_descriptor), intent(out) :: file_desc
+      type(file_descriptor), intent(inout) :: file_desc
       integer :: status
 
-      type(netcdf_file) :: nc_file
-      integer :: ncid
+      integer :: ncid, time_dimid, time_varid, ncstatus
+
+      status = -1
 
       ! Initialize file descriptor
-      nc_file%filename = filename
-      nc_file%type = file_type
-      nc_file%freq = freq
-      nc_file%time_index = 1
+      file_desc%filename = filename
+      file_desc%type = file_type
+      file_desc%freq = freq
+      file_desc%time_index = 1
+      file_desc%backend_id = -1
+      file_desc%time_dimid = -1
+      file_desc%time_varid = -1
 
       ! Create NetCDF file
-      call nc_check(nf90_create(filename, nf90_clobber, ncid), &
-                    "Create file: "//trim(filename))
-      nc_file%ncid = ncid
+      ncstatus = nf90_create(filename, nf90_clobber, ncid)
+      if (ncstatus /= nf90_noerr) then
+         print *, "ERROR: Cannot create file: ", trim(filename)
+         print *, "       NetCDF error: ", trim(nf90_strerror(ncstatus))
+         return
+      end if
+      file_desc%backend_id = ncid
 
-      ! Create time dimension
-      call nc_check(nf90_def_dim(ncid, "time", nf90_unlimited, nc_file%time_dimid), &
-                    "Create time dimension")
+      ! Create time dimension (unlimited)
+      ncstatus = nf90_def_dim(ncid, "time", nf90_unlimited, time_dimid)
+      if (ncstatus /= nf90_noerr) then
+         print *, "ERROR: Cannot create time dimension in: ", trim(filename)
+         print *, "       NetCDF error: ", trim(nf90_strerror(ncstatus))
+         ncstatus = nf90_close(ncid)
+         file_desc%backend_id = -1
+         return
+      end if
+      file_desc%time_dimid = time_dimid
 
       ! Create time variable if units provided
       if (present(time_units)) then
-         call nc_check(nf90_def_var(ncid, "time", nf90_real, [nc_file%time_dimid], &
-                                    nc_file%time_varid))
-         call nc_check(nf90_put_att(ncid, nc_file%time_varid, "units", trim(time_units)))
+         ncstatus = nf90_def_var(ncid, "time", nf90_real, [time_dimid], time_varid)
+         if (ncstatus /= nf90_noerr) then
+            print *, "WARNING: Cannot create time variable in: ", trim(filename)
+         else
+            file_desc%time_varid = time_varid
+            
+            ! Add attributes
+            ncstatus = nf90_put_att(ncid, time_varid, "units", trim(time_units))
+            ncstatus = nf90_put_att(ncid, time_varid, "standard_name", "time")
+            
+            if (present(calendar)) then
+               ncstatus = nf90_put_att(ncid, time_varid, "calendar", trim(calendar))
+            end if
 
-         if (present(calendar)) then
-            call nc_check(nf90_put_att(ncid, nc_file%time_varid, "calendar", trim(calendar)))
+            print *, "Created time variable in file: ", trim(filename), &
+               " with units: ", trim(time_units)
          end if
-
-         ! Add standard_name attribute for CF compliance
-         call nc_check(nf90_put_att(ncid, nc_file%time_varid, "standard_name", "time"))
-
-         print *, "Created time variable in file: ", trim(filename), &
-            " with units: ", trim(time_units)
       else
-         print *, "Warning: No time units provided, time variable not created in file: ", &
-            trim(filename)
+         print *, "Warning: No time units provided for file: ", trim(filename)
       end if
-
-      ! Add to open files list
-      call add_to_open_files(nc_file)
-
-      ! Copy values to output descriptor
-      file_desc%filename = nc_file%filename
-      file_desc%type = nc_file%type
-      file_desc%freq = nc_file%freq
-      file_desc%time_index = nc_file%time_index
-      file_desc%backend_id = nc_file%ncid
 
       status = 0
    end function nc_create_file
 
    !> Close a NetCDF file
    !>
-   !> @param[in] file_desc  File descriptor of the file to close
-   !> @return    Status code (0 = success)
+   !> @param[inout] file_desc  File descriptor of the file to close
+   !> @return       Status code (0 = success)
    function nc_close_file(file_desc) result(status)
-      type(file_descriptor), intent(in) :: file_desc
+      type(file_descriptor), intent(inout) :: file_desc
       integer :: status
-      integer :: i
 
       status = 0
 
-      ! Find the file in the registry
-      if (allocated(open_files)) then
-         do i = 1, size(open_files)
-            if (open_files(i)%ncid == file_desc%backend_id) then
-               ! Close the file
-               call nc_check(nf90_close(open_files(i)%ncid))
-               print *, "Closed file: ", trim(open_files(i)%filename)
-
-               ! Mark as closed
-               open_files(i)%ncid = -1
-               status = 0
-               return
-            end if
-         end do
+      if (file_desc%backend_id > 0) then
+         status = nf90_close(file_desc%backend_id)
+         if (status == nf90_noerr) then
+            print *, "Closed file: ", trim(file_desc%filename)
+            file_desc%backend_id = -1
+            status = 0
+         else
+            print *, "WARNING: Error closing file: ", trim(file_desc%filename)
+            print *, "         NetCDF error: ", trim(nf90_strerror(status))
+            status = -1
+         end if
       end if
-
-      ! File not found
-      print *, "Warning: File not found in registry: ", trim(file_desc%filename)
-      status = -1
    end function nc_close_file
-
-   !> Add a file to the registry of open files
-   !>
-   !> @param[in] file  NetCDF file descriptor
-   subroutine add_to_open_files(file)
-      type(netcdf_file), intent(in) :: file
-      type(netcdf_file), allocatable :: temp(:)
-      integer :: n
-
-      ! Add file to the list
-      if (.not. allocated(open_files)) then
-         allocate (open_files(1))
-         open_files(1) = file
-      else
-         ! Resize the array to add one more element
-         n = size(open_files)
-         allocate (temp(n + 1))
-         temp(1:n) = open_files
-         call move_alloc(temp, open_files)
-
-         ! Add new file
-         open_files(n + 1) = file
-      end if
-   end subroutine add_to_open_files
 
    !> Generate a filename for an output file
    !>
@@ -229,13 +181,9 @@ contains
 
       ! Determine the base prefix
       if (trim(var_prefix) == "") then
-         ! Global prefix from configuration
          prefix = get_output_prefix()
-         print *, "  Using global prefix: ", trim(prefix)
       else
-         ! Variable-specific prefix
          prefix = trim(var_prefix)
-         print *, "  Using var-specific prefix: ", trim(prefix)
       end if
 
       ! Convert frequency to string and build filename
@@ -253,9 +201,6 @@ contains
 
    !> Define a variable in a NetCDF file
    !>
-   !> This function creates dimensions and defines a variable in a NetCDF file
-   !> based on the variable's metadata and dimensionality.
-   !>
    !> @param[in] file_desc  File descriptor
    !> @param[in] var        Variable to define
    !> @return    Status code (0 = success)
@@ -264,7 +209,7 @@ contains
       type(io_variable), intent(in) :: var
       integer :: status
 
-      integer :: ncid, time_dimid, varid
+      integer :: ncid, varid
       type(axis) :: dummy_axis(1)
       type(axis), allocatable :: local_axes(:)
 
@@ -273,37 +218,33 @@ contains
 
       ! Check file validity
       if (ncid <= 0) then
-         print *, "Error: Invalid NetCDF file ID for: ", trim(file_desc%filename)
+         print *, "ERROR: Invalid NetCDF file ID for: ", trim(file_desc%filename)
          return
       end if
 
-      ! Get time dimension
-      status = nf90_inquire(ncid, unlimitedDimId=time_dimid)
-      if (status /= nf90_noerr) then
-         print *, "Warning: Could not find unlimited dimension in file: ", trim(file_desc%filename)
+      ! Check time dimension
+      if (file_desc%time_dimid <= 0) then
+         print *, "WARNING: No time dimension in file: ", trim(file_desc%filename)
          return
       end if
 
       ! Special case for scalar variables
       if (var%ndims == 0) then
-         ! Create a dummy axis for scalars
          dummy_axis(1) = create_axis("dummy", "Dummy dimension", "count", 1)
-
          call nc_define_variable(ncid, 0, var%name, var%long_name, var%units, &
-                                 dummy_axis, time_dimid, varid)
+                                 dummy_axis, file_desc%time_dimid, varid)
       else
-         ! For variables with multiple dimensions
+         ! For variables with dimensions
          if (allocated(var%var_grid%axes)) then
             allocate (local_axes(size(var%var_grid%axes)))
             local_axes = var%var_grid%axes
 
             call nc_define_variable(ncid, var%ndims, var%name, var%long_name, var%units, &
-                                    local_axes, time_dimid, varid)
+                                    local_axes, file_desc%time_dimid, varid)
 
             deallocate (local_axes)
          else
-            print *, "Warning: Variable ", trim(var%name), " has no axes defined"
-            status = -1
+            print *, "WARNING: Variable ", trim(var%name), " has no axes defined"
             return
          end if
       end if
@@ -311,11 +252,34 @@ contains
       status = 0
    end function nc_define_variable_in_file
 
+   !> End definition mode for a NetCDF file
+   !>
+   !> @param[in]  file_desc  File descriptor
+   !> @return     Status code (0 = success)
+   function nc_end_definition(file_desc) result(status)
+      type(file_descriptor), intent(in) :: file_desc
+      integer :: status
+
+      if (file_desc%backend_id <= 0) then
+         status = -1
+         return
+      end if
+
+      status = nf90_enddef(file_desc%backend_id)
+      if (status /= nf90_noerr) then
+         print *, "WARNING: Error ending definition mode for: ", trim(file_desc%filename)
+         print *, "         NetCDF error: ", trim(nf90_strerror(status))
+         status = -1
+      else
+         status = 0
+      end if
+   end function nc_end_definition
+
    !> Write variable data to a file
    !>
-   !> @param[in]     file_desc    File descriptor
-   !> @param[in]     var          Variable to write
-   !> @return        Status code (0 = success)
+   !> @param[in]  file_desc    File descriptor
+   !> @param[in]  var          Variable to write
+   !> @return     Status code (0 = success)
    function nc_write_variable_data(file_desc, var) result(status)
       type(file_descriptor), intent(in) :: file_desc
       type(io_variable), intent(in) :: var
@@ -324,18 +288,19 @@ contains
       integer :: ncid, varid, time_index
 
       status = -1
+      ncid = file_desc%backend_id
+      
+      if (ncid <= 0) then
+         print *, "ERROR: Invalid file for writing: ", trim(var%name)
+         return
+      end if
 
-      ! Get file information
-      ncid = get_ncid_from_descriptor(file_desc)
-      if (ncid < 0) return
-
-      time_index = get_time_index_from_ncid(ncid)
+      time_index = file_desc%time_index
 
       ! Get variable ID in this file
       varid = get_varid_for_variable(var, ncid)
       if (varid <= 0) then
-         print *, "Warning: Variable ", trim(var%name), " not defined in file"
-         status = -1
+         print *, "WARNING: Variable ", trim(var%name), " not defined in file"
          return
       end if
 
@@ -366,43 +331,42 @@ contains
 
    !> Write time value to a file
    !>
-   !> @param[in]     file_desc    File descriptor
-   !> @param[in]     time_value   Current time value
-   !> @return        Status code (0 = success)
+   !> @param[inout] file_desc    File descriptor (time_index will be incremented)
+   !> @param[in]    time_value   Current time value
+   !> @return       Status code (0 = success)
    function nc_write_time(file_desc, time_value) result(status)
-      type(file_descriptor), intent(in) :: file_desc
+      type(file_descriptor), intent(inout) :: file_desc
       real, intent(in) :: time_value
       integer :: status
 
-      integer :: ncid, time_varid, time_index
+      integer :: ncid, ncstatus
       real :: time_slice(1)
 
       status = -1
+      ncid = file_desc%backend_id
 
-      ! Get file information
-      ncid = get_ncid_from_descriptor(file_desc)
-      if (ncid < 0) return
+      if (ncid <= 0) return
 
-      time_varid = get_time_varid_from_ncid(ncid)
-      if (time_varid < 0) then
-         print *, "Warning: No time variable found in file: ", trim(file_desc%filename)
-         status = 0  ! Not an error, just no time variable
+      ! Check if we have a time variable
+      if (file_desc%time_varid <= 0) then
+         ! No time variable - not an error, just skip
+         status = 0
          return
       end if
 
-      time_index = get_time_index_from_ncid(ncid)
-
       ! Write time value
       time_slice(1) = time_value
-      print *, "Writing time value ", time_value, " to file: ", trim(file_desc%filename), &
-         " at index ", time_index
-
-      call nc_check(nf90_put_var(ncid, time_varid, time_slice, &
-                                 start=[time_index], count=[1]), &
-                    "Write time value")
+      ncstatus = nf90_put_var(ncid, file_desc%time_varid, time_slice, &
+                              start=[file_desc%time_index], count=[1])
+      
+      if (ncstatus /= nf90_noerr) then
+         print *, "WARNING: Error writing time to: ", trim(file_desc%filename)
+         print *, "         NetCDF error: ", trim(nf90_strerror(ncstatus))
+         return
+      end if
 
       ! Increment time index
-      call increment_time_index(ncid)
+      call file_desc%increment_time()
 
       status = 0
    end function nc_write_time
@@ -411,86 +375,9 @@ contains
    ! Helper functions
    !---------------------------------------------------------------------------
 
-   !> Get NetCDF ID from file descriptor
-   !>
-   !> @param[in]  file_desc  File descriptor
-   !> @return     NetCDF ID or -1 if not found
-   function get_ncid_from_descriptor(file_desc) result(ncid)
-      type(file_descriptor), intent(in) :: file_desc
-      integer :: ncid, i
-
-      ncid = -1
-
-      if (allocated(open_files)) then
-         do i = 1, size(open_files)
-            if (open_files(i)%ncid == file_desc%backend_id) then
-               ncid = open_files(i)%ncid
-               return
-            end if
-         end do
-      end if
-   end function get_ncid_from_descriptor
-
-   !> Get time variable ID for a file
-   !>
-   !> @param[in]  ncid  NetCDF file ID
-   !> @return     Time variable ID or -1 if not found
-   function get_time_varid_from_ncid(ncid) result(time_varid)
-      integer, intent(in) :: ncid
-      integer :: time_varid, i
-
-      time_varid = -1
-
-      if (allocated(open_files)) then
-         do i = 1, size(open_files)
-            if (open_files(i)%ncid == ncid) then
-               time_varid = open_files(i)%time_varid
-               return
-            end if
-         end do
-      end if
-   end function get_time_varid_from_ncid
-
-   !> Get current time index for a file
-   !>
-   !> @param[in]  ncid  NetCDF file ID
-   !> @return     Time index or -1 if not found
-   function get_time_index_from_ncid(ncid) result(time_index)
-      integer, intent(in) :: ncid
-      integer :: time_index, i
-
-      time_index = -1
-
-      if (allocated(open_files)) then
-         do i = 1, size(open_files)
-            if (open_files(i)%ncid == ncid) then
-               time_index = open_files(i)%time_index
-               return
-            end if
-         end do
-      end if
-   end function get_time_index_from_ncid
-
-   !> Increment time index for a file
-   !>
-   !> @param[in]  ncid  NetCDF file ID
-   subroutine increment_time_index(ncid)
-      integer, intent(in) :: ncid
-      integer :: i
-
-      if (allocated(open_files)) then
-         do i = 1, size(open_files)
-            if (open_files(i)%ncid == ncid) then
-               open_files(i)%time_index = open_files(i)%time_index + 1
-               return
-            end if
-         end do
-      end if
-   end subroutine increment_time_index
-
    !> Get NetCDF variable ID for a variable in a file
    !>
-   !> @param[in]  var   Variable to check
+   !> @param[in]  var   Variable to find
    !> @param[in]  ncid  NetCDF file ID
    !> @return     Variable ID or -1 if not found
    function get_varid_for_variable(var, ncid) result(varid)
@@ -498,26 +385,9 @@ contains
       integer, intent(in) :: ncid
       integer :: varid
 
-      varid = -1
-
-      ! Try to find the variable in the file
-      if (nf90_inq_varid(ncid, trim(var%name), varid) == nf90_noerr) then
-         return
+      if (nf90_inq_varid(ncid, trim(var%name), varid) /= nf90_noerr) then
+         varid = -1
       end if
-
-      ! If not found, return -1
-      varid = -1
    end function get_varid_for_variable
-
-   !> End definition mode for a NetCDF file
-   !>
-   !> @param[in]  file_desc  File descriptor
-   !> @return     Status code (0 = success)
-   function nc_end_definition(file_desc) result(status)
-      type(file_descriptor), intent(in) :: file_desc
-      integer :: status
-
-      status = nf90_enddef(file_desc%backend_id)
-   end function nc_end_definition
 
 end module io_netcdf
