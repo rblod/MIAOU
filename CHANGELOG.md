@@ -1,6 +1,63 @@
 # MIAOU - Changelog
 
-## Version 3.2.0 (Refactored) - 2025-04
+## Version 0.3.0 - 2025-04
+
+### Résumé
+
+Amélioration de la modularité avec centralisation des constantes et extraction de la logique de nommage des fichiers.
+
+---
+
+### 4. Constantes centralisées
+
+**Problème :**  
+Les constantes (`TOLERANCE = 1.0e-5`, tailles de chaînes, etc.) étaient définies dans plusieurs fichiers, créant des risques d'incohérence.
+
+**Solution :**  
+Nouveau module `io_constants.F90` regroupant toutes les constantes :
+
+| Catégorie | Constantes |
+|-----------|------------|
+| Tolérances | `IO_TIME_TOLERANCE` |
+| Longueurs de chaînes | `IO_VARNAME_LEN`, `IO_LONGNAME_LEN`, `IO_UNITS_LEN`, `IO_PREFIX_LEN`, `IO_PATH_LEN`, `IO_FILETYPE_LEN` |
+| Limites de tableaux | `IO_MAX_VARS`, `IO_MAX_FILES`, `IO_MAX_DIMS`, `IO_INITIAL_ALLOC`, `IO_GROWTH_FACTOR` |
+| Types de fichiers | `IO_TYPE_HIS`, `IO_TYPE_AVG`, `IO_TYPE_RST`, `IO_FILE_TYPES`, `IO_NUM_FILE_TYPES` |
+| Valeurs par défaut | `IO_FREQ_DISABLED`, `IO_DEFAULT_PREFIX` |
+
+**Fichiers modifiés :**
+- `io_definitions.F90` : Utilise `IO_*_LEN`, `IO_FREQ_DISABLED`, `IO_INITIAL_ALLOC`, `IO_GROWTH_FACTOR`
+- `io_config.F90` : Utilise `IO_VARNAME_LEN`, `IO_PREFIX_LEN`, `IO_FREQ_DISABLED`, `IO_DEFAULT_PREFIX`
+- `io_manager.F90` : Utilise `IO_TIME_TOLERANCE`, `IO_FILE_TYPES`, `IO_NUM_FILE_TYPES`, `IO_INITIAL_ALLOC`
+
+---
+
+### 5. Extraction du nommage des fichiers
+
+**Problème :**  
+`generate_filename()` était dans `io_netcdf.F90` mais la convention de nommage est indépendante de NetCDF.
+
+**Solution :**  
+Nouveau module `io_naming.F90` contenant :
+
+| Fonction | Description |
+|----------|-------------|
+| `generate_filename(prefix, type, freq, ext)` | Génère un nom de fichier selon la convention `{prefix}_{type}_{freq}s.{ext}` |
+| `parse_filename(...)` | Parse un nom de fichier pour extraire ses composants |
+| `set_default_extension(ext)` | Définit l'extension par défaut (appelé par le backend) |
+| `get_default_extension()` | Récupère l'extension par défaut |
+
+**Avantages :**
+- Le backend ne fournit que l'extension (`.nc`, `.h5`, `.zarr`)
+- La convention de nommage est testable indépendamment
+- Facilite l'ajout de conventions alternatives
+
+**Fichiers modifiés :**
+- `io_netcdf.F90` : Suppression de `generate_filename`, suppression de l'export public
+- `io_manager.F90` : Import de `generate_filename` depuis `io_naming`
+
+---
+
+## Version 0.2.0 (Refactored) - 2025-04
 
 ### Résumé
 

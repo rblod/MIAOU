@@ -16,11 +16,14 @@
 !> @date 2025-04-11
 !===============================================================================
 module io_manager
+   use io_constants, only: IO_TIME_TOLERANCE, IO_PATH_LEN, IO_PREFIX_LEN, &
+                           IO_FILE_TYPES, IO_NUM_FILE_TYPES, IO_INITIAL_ALLOC
    use io_definitions, only: io_variable, file_descriptor, io_var_registry
    use io_config, only: read_io_config, apply_config_to_variable, get_output_prefix
+   use io_naming, only: generate_filename
    use io_netcdf, only: nc_initialize, nc_finalize, nc_create_file, &
                         nc_write_variable_data, nc_write_time, &
-                        nc_close_file, generate_filename, nc_define_variable_in_file, &
+                        nc_close_file, nc_define_variable_in_file, &
                         nc_end_definition, get_varid_for_variable
    use io_netcdf_avg, only: accumulate_avg, write_variable_avg, reset_avg
 
@@ -39,15 +42,9 @@ module io_manager
    type(file_descriptor), allocatable, target :: open_files(:)
    integer :: num_files = 0
 
-   ! File types
-   character(len=*), parameter :: FILE_TYPES(3) = ["his", "avg", "rst"]
-
-   ! Constants
-   real, parameter :: TOLERANCE = 1.0e-5
-
    ! Time configuration storage
-   character(len=256), private :: stored_time_units = "seconds since 2023-01-01 00:00:00"
-   character(len=256), private :: stored_calendar = "gregorian"
+   character(len=IO_PATH_LEN), private :: stored_time_units = "seconds since 2023-01-01 00:00:00"
+   character(len=IO_PATH_LEN), private :: stored_calendar = "gregorian"
 
    ! Module state
    logical, private :: is_initialized = .false.
@@ -214,13 +211,13 @@ contains
       integer :: n
 
       if (.not. allocated(open_files)) then
-         allocate(open_files(10))  ! Pre-allocate space
+         allocate(open_files(IO_INITIAL_ALLOC))  ! Pre-allocate space
          num_files = 1
          open_files(1) = file_desc
       else if (num_files >= size(open_files)) then
          ! Need to expand
          n = size(open_files)
-         allocate(temp(n + 10))
+         allocate(temp(n + IO_INITIAL_ALLOC))
          temp(1:n) = open_files
          call move_alloc(temp, open_files)
          num_files = num_files + 1
@@ -304,9 +301,9 @@ contains
          if (.not. associated(var_ptr)) cycle
 
          ! For each output file type
-         do j = 1, size(FILE_TYPES)
+         do j = 1, IO_NUM_FILE_TYPES
             ! Check if this variable should be written to this type of file
-            select case (trim(FILE_TYPES(j)))
+            select case (trim(IO_FILE_TYPES(j)))
             case ("his")
                if (.not. var_ptr%to_his) cycle
                freq = var_ptr%freq_his
@@ -321,14 +318,18 @@ contains
             ! Skip if frequency not defined
             if (freq <= 0) cycle
 
-            ! Generate filename
-            filename = generate_filename(var_ptr%file_prefix, FILE_TYPES(j), freq)
+            ! Generate filename - use global prefix if variable prefix is empty
+            if (trim(var_ptr%file_prefix) == "") then
+               filename = generate_filename(get_output_prefix(), IO_FILE_TYPES(j), freq)
+            else
+               filename = generate_filename(var_ptr%file_prefix, IO_FILE_TYPES(j), freq)
+            end if
 
             ! Check if file already exists in our list
             if (file_exists(filename)) cycle
 
             ! Create the file
-            status = nc_create_file(filename, FILE_TYPES(j), freq, &
+            status = nc_create_file(filename, IO_FILE_TYPES(j), freq, &
                                    local_time_units, local_calendar, file_desc)
 
             if (status /= 0) then
@@ -337,7 +338,7 @@ contains
             end if
 
             ! Define all applicable variables in this file
-            call define_variables_in_file(file_desc, FILE_TYPES(j))
+            call define_variables_in_file(file_desc, IO_FILE_TYPES(j))
 
             ! End definition mode
             status = nc_end_definition(file_desc)
@@ -595,7 +596,7 @@ contains
       if (freq <= 0.0) then
          is_time = .false.
       else
-         is_time = abs(mod(current_time, freq)) < TOLERANCE
+         is_time = abs(mod(current_time, freq)) < IO_TIME_TOLERANCE
       end if
    end function is_output_time
 
@@ -637,7 +638,7 @@ contains
       if (freq <= 0.0) return
 
       ! Determine if we should write at this time step
-      if (abs(current_time) < TOLERANCE) then
+      if (abs(current_time) < IO_TIME_TOLERANCE) then
          ! First time step - only write history
          should_write = (trim(file_ptr%type) == "his")
       else

@@ -15,6 +15,7 @@
 !===============================================================================
 module io_netcdf
    use netcdf
+   use io_constants, only: IO_PATH_LEN, IO_PREFIX_LEN
    use netcdf_utils, only: nc_check
    use netcdf_backend, only: nc_define_variable, nc_write_variable
    use grid_module, only: grid, axis, create_axis
@@ -27,7 +28,7 @@ module io_netcdf
    public :: nc_initialize, nc_finalize
    public :: nc_create_file, nc_close_file
    public :: nc_write_variable_data, nc_write_time
-   public :: generate_filename, nc_define_variable_in_file
+   public :: nc_define_variable_in_file
    public :: nc_end_definition, get_varid_for_variable
 
    ! Module state
@@ -164,36 +165,6 @@ contains
          end if
       end if
    end function nc_close_file
-
-   !> Generate a filename for an output file
-   !>
-   !> @param[in] var_prefix  Variable-specific prefix, or "" for global prefix
-   !> @param[in] file_type   Type of file ("his", "avg", or "rst")
-   !> @param[in] freq        Output frequency in seconds
-   !> @return    Complete filename with appropriate prefix and frequency
-   function generate_filename(var_prefix, file_type, freq) result(filename)
-      character(len=*), intent(in) :: var_prefix, file_type
-      real, intent(in) :: freq
-      character(len=256) :: filename
-
-      character(len=16) :: freq_str
-      character(len=128) :: prefix
-
-      ! Determine the base prefix
-      if (trim(var_prefix) == "") then
-         prefix = get_output_prefix()
-      else
-         prefix = trim(var_prefix)
-      end if
-
-      ! Convert frequency to string and build filename
-      if (freq > 0) then
-         write (freq_str, '(I0)') nint(freq)
-         filename = trim(prefix)//'_'//trim(file_type)//'_'//trim(freq_str)//'s.nc'
-      else
-         filename = trim(prefix)//'_'//trim(file_type)//'.nc'
-      end if
-   end function generate_filename
 
    !---------------------------------------------------------------------------
    ! Variable operations

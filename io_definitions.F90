@@ -12,6 +12,9 @@
 !===============================================================================
 module io_definitions
    use grid_module, only: grid
+   use io_constants, only: IO_VARNAME_LEN, IO_LONGNAME_LEN, IO_UNITS_LEN, &
+                           IO_PREFIX_LEN, IO_PATH_LEN, IO_FILETYPE_LEN, &
+                           IO_FREQ_DISABLED, IO_INITIAL_ALLOC, IO_GROWTH_FACTOR
    implicit none
    private
 
@@ -27,11 +30,11 @@ module io_definitions
    !> independent of the specific storage format.
    type :: io_variable
       ! Basic metadata
-      character(len=32) :: name       !< short name
-      character(len=64) :: long_name  !< long name
-      character(len=32) :: units      !< unit
-      type(grid) :: var_grid          !< associated grid
-      integer :: ndims = 0            !< number of dimensions
+      character(len=IO_VARNAME_LEN) :: name = ""        !< short name
+      character(len=IO_LONGNAME_LEN) :: long_name = ""  !< long name
+      character(len=IO_UNITS_LEN) :: units = ""         !< unit
+      type(grid) :: var_grid                            !< associated grid
+      integer :: ndims = 0                              !< number of dimensions
 
       ! Output flags
       logical :: to_his = .false.     !< write to history
@@ -45,10 +48,10 @@ module io_definitions
       real, pointer :: data_3d(:, :, :) => null()   !< 3D data
 
       ! Output frequency settings
-      real :: freq_his = -1.                  !< history frequency
-      real :: freq_avg = -1.                  !< average frequency
-      real :: freq_rst = -1.                  !< restart frequency
-      character(len=128) :: file_prefix = ""  !< file prefix
+      real :: freq_his = IO_FREQ_DISABLED           !< history frequency
+      real :: freq_avg = IO_FREQ_DISABLED           !< average frequency
+      real :: freq_rst = IO_FREQ_DISABLED           !< restart frequency
+      character(len=IO_PREFIX_LEN) :: file_prefix = ""  !< file prefix
 
       ! Fields for average accumulation
       real :: scalar_avg = 0.0                      !< average buffer for scalar (0D) values
@@ -67,10 +70,10 @@ module io_definitions
    !> metadata. All file state is centralized here to avoid duplication.
    type :: file_descriptor
       ! Core file information
-      character(len=256) :: filename = ""   !< Complete filename
-      character(len=16) :: type = ""        !< "his" (history), "avg" (average), or "rst" (restart)
-      real :: freq = -1.0                   !< Write frequency (seconds)
-      integer :: time_index = 1             !< Current time write index
+      character(len=IO_PATH_LEN) :: filename = ""   !< Complete filename
+      character(len=IO_FILETYPE_LEN) :: type = ""   !< "his" (history), "avg" (average), or "rst" (restart)
+      real :: freq = IO_FREQ_DISABLED               !< Write frequency (seconds)
+      integer :: time_index = 1                     !< Current time write index
 
       ! Backend-specific identifiers (NetCDF)
       integer :: backend_id = -1            !< Backend file ID (e.g., NetCDF ncid)
@@ -148,12 +151,12 @@ contains
 
       if (.not. allocated(this%variables)) then
          ! Initial allocation with extra space
-         allocate (this%variables(10))
+         allocate (this%variables(IO_INITIAL_ALLOC))
          this%count = 1
          this%variables(1) = var
 
          ! Mark other elements as unused
-         do i = 2, 10
+         do i = 2, IO_INITIAL_ALLOC
             this%variables(i)%name = ""
          end do
       else
@@ -167,7 +170,7 @@ contains
          end do
 
          ! No empty slots, need to expand
-         new_size = size(this%variables) + max(5, nint(size(this%variables)*0.5))
+         new_size = size(this%variables) + max(5, (size(this%variables) * IO_GROWTH_FACTOR) / 100)
          allocate (temp(new_size))
 
          ! Copy existing data

@@ -11,6 +11,8 @@
 !> @date 2025-04-11
 !===============================================================================
 module io_config
+   use io_constants, only: IO_VARNAME_LEN, IO_PREFIX_LEN, IO_FREQ_DISABLED, &
+                           IO_DEFAULT_PREFIX
    use io_definitions, only: io_variable
    implicit none
    private
@@ -25,7 +27,7 @@ module io_config
    !> is written to different output file types.
    type, public :: var_config
       !> Variable name
-      character(len=32)  :: name = ""
+      character(len=IO_VARNAME_LEN)  :: name = ""
 
       !> Flag to enable/disable history file output
       logical :: wrt = .false.
@@ -37,23 +39,23 @@ module io_config
       logical :: rst = .false.
 
       !> Custom file prefix for this variable (if not using global prefix)
-      character(len=128) :: file_prefix = ""
+      character(len=IO_PREFIX_LEN) :: file_prefix = ""
 
       !> Output frequency for history files (seconds)
       !> @note Negative value disables output
-      real :: freq_his = -1.0
+      real :: freq_his = IO_FREQ_DISABLED
 
       !> Output frequency for average files (seconds)
       !> @note Negative value disables output
-      real :: freq_avg = -1.0
+      real :: freq_avg = IO_FREQ_DISABLED
 
       !> Output frequency for restart files (seconds)
       !> @note Negative value disables output
-      real :: freq_rst = -1.0
+      real :: freq_rst = IO_FREQ_DISABLED
    end type var_config
 
    !> Global configuration settings
-   character(len=128), private :: output_prefix = "model"
+   character(len=IO_PREFIX_LEN), private :: output_prefix = IO_DEFAULT_PREFIX
    real, private :: global_freq_his = 3600.0
    real, private :: global_freq_avg = 7200.0
    real, private :: global_freq_rst = 86400.0
@@ -290,7 +292,7 @@ contains
    !>
    !> @return Current global output prefix
    function get_output_prefix() result(prefix)
-      character(len=128) :: prefix
+      character(len=IO_PREFIX_LEN) :: prefix
       prefix = output_prefix
    end function get_output_prefix
 

@@ -1,7 +1,9 @@
 # Makefile for MIAOU - Modular I/O Architecture for Ocean and Unified models
 #
 # REFACTORED version with:
+# - Centralized constants (io_constants.F90)
 # - Centralized error handling (io_error.F90)
+# - File naming module (io_naming.F90)
 # - Single file registry (no duplication)
 # - Pointer-based variable access
 
@@ -21,10 +23,10 @@ LDFLAGS = $(NCDF_LIB)
 
 # Source files in dependency order
 # Level 0: No dependencies (except netcdf)
-SRCS_L0 = io_error.F90 grid_module.F90 ocean_var.F90
+SRCS_L0 = io_constants.F90 io_error.F90 grid_module.F90 ocean_var.F90
 
 # Level 1: Depends on L0
-SRCS_L1 = netcdf_utils.F90 io_definitions.F90
+SRCS_L1 = io_naming.F90 netcdf_utils.F90 io_definitions.F90
 
 # Level 2: Depends on L1
 SRCS_L2 = netcdf_backend.F90 io_config.F90
@@ -61,6 +63,9 @@ $(TARGET): $(OBJS)
 # Compile rules with explicit dependencies
 
 # Level 0
+io_constants.o: io_constants.F90
+	$(FC) $(FCFLAGS) -c $<
+
 io_error.o: io_error.F90
 	$(FC) $(FCFLAGS) -c $<
 
@@ -71,21 +76,24 @@ ocean_var.o: ocean_var.F90
 	$(FC) $(FCFLAGS) -c $<
 
 # Level 1
+io_naming.o: io_naming.F90 io_constants.o
+	$(FC) $(FCFLAGS) -c $<
+
 netcdf_utils.o: netcdf_utils.F90 io_error.o
 	$(FC) $(FCFLAGS) -c $<
 
-io_definitions.o: io_definitions.F90 grid_module.o
+io_definitions.o: io_definitions.F90 grid_module.o io_constants.o
 	$(FC) $(FCFLAGS) -c $<
 
 # Level 2
 netcdf_backend.o: netcdf_backend.F90 netcdf_utils.o grid_module.o
 	$(FC) $(FCFLAGS) -c $<
 
-io_config.o: io_config.F90 io_definitions.o
+io_config.o: io_config.F90 io_definitions.o io_constants.o
 	$(FC) $(FCFLAGS) -c $<
 
 # Level 3
-io_netcdf.o: io_netcdf.F90 netcdf_utils.o netcdf_backend.o grid_module.o io_definitions.o io_config.o
+io_netcdf.o: io_netcdf.F90 netcdf_utils.o netcdf_backend.o grid_module.o io_definitions.o io_config.o io_constants.o
 	$(FC) $(FCFLAGS) -c $<
 
 io_netcdf_avg.o: io_netcdf_avg.F90 io_definitions.o netcdf_backend.o
@@ -95,7 +103,7 @@ var_definitions.o: var_definitions.F90 grid_module.o io_definitions.o ocean_var.
 	$(FC) $(FCFLAGS) -c $<
 
 # Level 4
-io_manager.o: io_manager.F90 io_definitions.o io_config.o io_netcdf.o io_netcdf_avg.o
+io_manager.o: io_manager.F90 io_definitions.o io_config.o io_netcdf.o io_netcdf_avg.o io_constants.o io_naming.o
 	$(FC) $(FCFLAGS) -c $<
 
 # Level 5
