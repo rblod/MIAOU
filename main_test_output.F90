@@ -1,15 +1,15 @@
 !===============================================================================
 !> @file main_test_output.F90
 !>
-!> Test program for multi-dimensional output system
+!> @brief Test program for the file-centric I/O system
 !>
-!> This program demonstrates the capabilities of the enhanced output system
-!> by creating and writing variables of different dimensions (0D to 3D).
-!> It simulates a time loop with increasing values and writes outputs at
-!> specified frequencies.
+!> This program demonstrates the new file-centric output system where:
+!> - Output files are defined in configuration (not per-variable)
+!> - Same variable can go to multiple files with different frequencies
+!> - Operations (instant, average, min, max) are per-file
 !>
 !> @author Rachid Benshila
-!> @date 2025-04-11
+!> @date 2025-04
 !===============================================================================
 program main_test_output
    use var_registry
@@ -19,80 +19,93 @@ program main_test_output
 
    implicit none
 
-   !> Domain size and time steps
-   integer, parameter :: nx = 10, ny = 8, nz = 5, nt = 10
-   integer :: t, status
+   !> Domain size and time parameters
+   integer, parameter :: nx = 10, ny = 8, nz = 5
+   integer, parameter :: nt = 30                    ! 30 hours of simulation
+   real, parameter :: dt_sim = 3600.0               ! 1 hour timestep
+   
+   integer :: t, status, i
    real :: current_time
-   character(len=128) :: time_units, calendar
 
-   ! Allocation of test fields
-   allocate (zeta(nx, ny))
-   allocate (temp(nx, ny, nz))
-   allocate (u(nx, ny))
-   allocate (v(nx, ny))
-   allocate (temp_profile(nz))
+   print *, "========================================"
+   print *, "MIAOU File-Centric I/O Test"
+   print *, "========================================"
 
-   ! Initialization for ocean variables
+   ! Allocate model fields
+   allocate(zeta(nx, ny))
+   allocate(temp(nx, ny, nz))
+   allocate(u(nx, ny))
+   allocate(v(nx, ny))
+   allocate(temp_profile(nz))
+
+   ! Initialize fields
    zeta = 0.0
-   temp = 0.0
+   temp = 15.0          ! Initial temperature 15°C
    u = 0.0
    v = 0.0
-   temp_profile = 0.0
-   wind_speed = 0.0
+   temp_profile = 15.0
+   wind_speed = 5.0     ! Initial wind 5 m/s
 
-   ! Calendar settings
-   time_units = "seconds since 2023-01-01 00:00:00"
-   calendar = "gregorian"
-
-   ! Initialize I/O system with configuration
-   status = initialize_io("output_config.nml", time_units, calendar)
+   ! Initialize I/O system (reads output_config.nml)
+   print *, ""
+   print *, "Initializing I/O system..."
+   status = initialize_io("output_config.nml")
    if (status /= 0) then
-      print *, "Warning: I/O initialization failed with status", status
+      print *, "Warning: Config file issue, using defaults"
    end if
 
+   ! Initialize and register variables
+   print *, ""
+   print *, "Registering variables..."
    call init_variables(nx, ny, nz)
 
    ! Time loop
+   print *, ""
+   print *, "Starting time loop..."
+   print *, "  Simulation: ", nt, " steps of ", dt_sim, " seconds"
+   print *, ""
+
    do t = 1, nt
-      ! Time in seconds
-      current_time = (t)*dt
+      current_time = t * dt_sim
 
-      ! Fill values for test - all dimensions
-      zeta = zeta + 0.1*t                     ! 2D field: free surface
-      temp = temp + 0.2*t                     ! 3D field: temperature
-      temp_profile = temp_profile + 0.5*t     ! 1D profile: vertical temperature
-      wind_speed = 5.0 + 0.1*t                ! 0D scalar: wind speed
-      u = t                                   ! 2D field: x-velocity
-      v = t*0.5                               ! 2D field: y-velocity
+      ! Update model fields (simple test patterns)
+      zeta = sin(current_time / 3600.0) * 0.5      ! Tidal-like oscillation
+      u = 0.1 * sin(current_time / 7200.0)         ! Slow current variation
+      v = 0.05 * cos(current_time / 7200.0)
+      temp = 15.0 + 2.0 * sin(current_time / 43200.0)  ! Daily temperature cycle
+      temp_profile = 15.0 - 0.5 * [(i, i=1,nz)]   ! Decreasing with depth
+      wind_speed = 5.0 + 3.0 * sin(current_time / 21600.0)  ! 6-hour wind cycle
 
-      ! Debug for the specific file
-      if (abs(current_time - 18000.0) < 10.0) then
-         print *, "At time ", current_time, " v(1,1) = ", v(1, 1)
-      end if
-
-      ! Check if this is the last time step
+      ! Write outputs (io_manager handles timing for each file)
       if (t == nt) then
-         ! Write all outputs at final step (including restart files)
-         status = write_all_data(current_time, .true.)
+         status = write_output(current_time, is_final=.true.)
       else
-         ! Write outputs during normal steps
-         status = write_all_data(current_time)
+         status = write_output(current_time)
       end if
 
-      if (status /= 0) then
-         print *, "Warning: Write operation failed at time", current_time
+      ! Progress indicator
+      if (mod(t, 6) == 0) then
+         print *, "  Time step ", t, "/", nt, " (", current_time/3600.0, " hours)"
       end if
    end do
 
-   ! Finalize I/O system - close files and clean up
+   ! Finalize
+   print *, ""
+   print *, "Finalizing I/O system..."
    status = finalize_io()
-   if (status /= 0) then
-      print *, "Warning: I/O finalization failed with status", status
-   end if
 
-   ! Deallocate memory for model variables
-   deallocate (zeta, temp, u, v, temp_profile)
+   ! Cleanup
+   deallocate(zeta, temp, u, v, temp_profile)
 
-   print *, "Test with multi-dimensional variables completed successfully!"
+   print *, ""
+   print *, "========================================"
+   print *, "Test completed successfully!"
+   print *, ""
+   print *, "Output files created:"
+   print *, "  - ocean_hourly_3600s.nc     (instantaneous, hourly)"
+   print *, "  - ocean_6hourly_21600s.nc   (instantaneous, 6-hourly)"
+   print *, "  - ocean_daily_avg_86400s.nc (daily averages)"
+   print *, "========================================"
+
 
 end program main_test_output

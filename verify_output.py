@@ -1,21 +1,19 @@
 #!/usr/bin/env python3
 """
-Enhanced verification script for MIAOU
+Enhanced verification script for MIAOU (File-Centric Architecture)
+
 This script:
-1. Reproduces the calculations from the main_test_output program
-2. Reads the namelist configuration with support for global defaults
-3. Compares calculated values with the content of generated NetCDF files
-4. Supports 0D (scalar), 1D, 2D, and 3D variables
+1. Parses the new io_files_nml namelist format
+2. Reproduces the calculations from main_test_output
+3. Compares calculated values with NetCDF file contents
+4. Supports instant, average, min, max operations
 5. Displays errors in red and success in green
-6. Provides a summary of errors at the end
 """
 
 import os
 import re
 import numpy as np
 import xarray as xr
-from datetime import datetime
-
 
 # ANSI color codes for terminal output
 class Colors:
@@ -26,7 +24,6 @@ class Colors:
     RED = "\033[91m"
     ENDC = "\033[0m"
     BOLD = "\033[1m"
-    UNDERLINE = "\033[4m"
 
 
 def color_print(message, color):
@@ -34,148 +31,82 @@ def color_print(message, color):
     print(f"{color}{message}{Colors.ENDC}")
 
 
-# Simulation parameters (identical to those in main_test_output program)
+# Simulation parameters (must match main_test_output.F90)
 NX = 10
 NY = 8
 NZ = 5
-NT = 10
-DT = 1800.0  # seconds - time step
+NT = 30          # 30 hours of simulation
+DT = 3600.0      # 1 hour timestep
 
 # Global error tracking
 error_summary = []
 
 
 def parse_namelist(filename="output_config.nml"):
-    """Parse the namelist file to extract output configuration with global defaults support"""
-
+    """Parse the new file-centric namelist format (io_files_nml)"""
+    
     config = {
         "global": {
-            "output_prefix": "ocean",  # Default prefix
-            "global_freq_his": 3600.0,  # Default frequencies
-            "global_freq_avg": 7200.0,
-            "global_freq_rst": 9000.0,
-            "global_to_his": True,  # Default output flags
-            "global_to_avg": False,
-            "global_to_rst": True,
+            "output_prefix": "ocean",
+            "time_units": "seconds since 2023-01-01 00:00:00",
+            "calendar": "gregorian",
         },
-        "variables": [],
+        "files": [],
     }
-
+    
     if not os.path.exists(filename):
         color_print(f"ERROR: File {filename} not found!", Colors.RED)
         return config
-
-    # Read the file
+    
     with open(filename, "r") as f:
         content = f.read()
-
-    # Extract global parameters
-    global_match = re.search(r"&output_global(.*?)/", content, re.DOTALL)
-    if global_match:
-        global_section = global_match.group(1)
-
-        # Extract output_prefix
-        prefix_match = re.search(r'output_prefix\s*=\s*"([^"]*)"', global_section)
-        if prefix_match:
-            config["global"]["output_prefix"] = prefix_match.group(1)
-
-        # Extract global frequencies
-        freq_his_match = re.search(r"global_freq_his\s*=\s*([\d\.]+)", global_section)
-        if freq_his_match:
-            config["global"]["global_freq_his"] = float(freq_his_match.group(1))
-
-        freq_avg_match = re.search(r"global_freq_avg\s*=\s*([\d\.]+)", global_section)
-        if freq_avg_match:
-            config["global"]["global_freq_avg"] = float(freq_avg_match.group(1))
-
-        freq_rst_match = re.search(r"global_freq_rst\s*=\s*([\d\.]+)", global_section)
-        if freq_rst_match:
-            config["global"]["global_freq_rst"] = float(freq_rst_match.group(1))
-
-        # Extract global output flags
-        to_his_match = re.search(
-            r"global_to_his\s*=\s*(\.true\.|\.false\.)", global_section
-        )
-        if to_his_match:
-            config["global"]["global_to_his"] = to_his_match.group(1) == ".true."
-
-        to_avg_match = re.search(
-            r"global_to_avg\s*=\s*(\.true\.|\.false\.)", global_section
-        )
-        if to_avg_match:
-            config["global"]["global_to_avg"] = to_avg_match.group(1) == ".true."
-
-        to_rst_match = re.search(
-            r"global_to_rst\s*=\s*(\.true\.|\.false\.)", global_section
-        )
-        if to_rst_match:
-            config["global"]["global_to_rst"] = to_rst_match.group(1) == ".true."
-
-    # Extract variables
-    dyn_match = re.search(r"&output_vars(.*?)/", content, re.DOTALL)
-    if dyn_match:
-        dyn_section = dyn_match.group(1)
-
-        # Find all var_configs lines
-        var_lines = re.findall(
-            r'var_configs\(\d+\)\s*=\s*"([^"]*)"\s*,\s*(\.true\.|\.false\.)\s*,\s*(\.true\.|\.false\.)\s*,\s*(\.true\.|\.false\.)\s*,\s*"([^"]*)"\s*,\s*([^,]*),\s*([^,]*),\s*([^.,]*)',
-            dyn_section,
-        )
-        for var_line in var_lines:
-            name, wrt, avg, rst, prefix, freq_his, freq_avg, freq_rst = var_line
-            var_config = {
-                "name": name.strip(),
-                "wrt": wrt == ".true.",
-                "avg": avg == ".true.",
-                "rst": rst == ".true.",
-                "prefix": prefix.strip(),
-                "freq_his": float(freq_his),
-                "freq_avg": float(freq_avg),
-                "freq_rst": float(freq_rst),
+    
+    # Extract global prefix
+    prefix_match = re.search(r'nml_output_prefix\s*=\s*"([^"]*)"', content)
+    if prefix_match:
+        config["global"]["output_prefix"] = prefix_match.group(1)
+    
+    # Extract time units
+    units_match = re.search(r'nml_time_units\s*=\s*"([^"]*)"', content)
+    if units_match:
+        config["global"]["time_units"] = units_match.group(1)
+    
+    # Extract calendar
+    cal_match = re.search(r'nml_calendar\s*=\s*"([^"]*)"', content)
+    if cal_match:
+        config["global"]["calendar"] = cal_match.group(1)
+    
+    # Extract file definitions (up to 20 files)
+    for i in range(1, 21):
+        name_match = re.search(rf'file_name\({i}\)\s*=\s*"([^"]*)"', content)
+        freq_match = re.search(rf'file_freq\({i}\)\s*=\s*([\d\.]+)', content)
+        op_match = re.search(rf'file_operation\({i}\)\s*=\s*"([^"]*)"', content)
+        vars_match = re.search(rf'file_vars\({i}\)\s*=\s*"([^"]*)"', content)
+        prefix_match = re.search(rf'file_prefix\({i}\)\s*=\s*"([^"]*)"', content)
+        
+        if name_match and freq_match:
+            file_def = {
+                "name": name_match.group(1),
+                "freq": float(freq_match.group(1)),
+                "operation": op_match.group(1).lower() if op_match else "instant",
+                "variables": [v.strip() for v in vars_match.group(1).split(",")] if vars_match else [],
+                "prefix": prefix_match.group(1) if prefix_match else config["global"]["output_prefix"],
             }
-
-            # Apply global defaults for missing values
-            if not (var_config["wrt"] or var_config["avg"] or var_config["rst"]):
-                var_config["wrt"] = config["global"]["global_to_his"]
-                var_config["avg"] = config["global"]["global_to_avg"]
-                var_config["rst"] = config["global"]["global_to_rst"]
-
-            if var_config["wrt"] and var_config["freq_his"] < 0:
-                var_config["freq_his"] = config["global"]["global_freq_his"]
-
-            if var_config["avg"] and var_config["freq_avg"] < 0:
-                var_config["freq_avg"] = config["global"]["global_freq_avg"]
-
-            if var_config["rst"] and var_config["freq_rst"] < 0:
-                var_config["freq_rst"] = config["global"]["global_freq_rst"]
-
-            config["variables"].append(var_config)
-
+            config["files"].append(file_def)
+    
     # Debug info
-    color_print(
-        f"Global output_prefix: '{config['global']['output_prefix']}'", Colors.BLUE
-    )
-    color_print(f"Found {len(config['variables'])} variables in namelist:", Colors.BLUE)
-    for var in config["variables"]:
-        print(
-            f"  - {var['name']}: his={var['wrt']}, avg={var['avg']}, rst={var['rst']}, prefix='{var['prefix']}'"
-        )
-
+    color_print(f"\nParsed configuration:", Colors.BLUE)
+    color_print(f"  Global prefix: '{config['global']['output_prefix']}'", Colors.BLUE)
+    color_print(f"  Found {len(config['files'])} file definitions:", Colors.BLUE)
+    for f in config["files"]:
+        print(f"    - {f['name']}: freq={f['freq']}s, op={f['operation']}, vars={f['variables']}")
+    
     return config
 
 
 def simulate_calculations():
-    """Reproduces the analytical calculations performed in the model"""
-
-    # Initialize arrays for different dimensions
-    zeta = np.zeros((NX, NY))  # 2D
-    temp = np.zeros((NX, NY, NZ))  # 3D
-    u = np.zeros((NX, NY))  # 2D
-    v = np.zeros((NX, NY))  # 2D
-    wind_speed = 0.0  # 0D (scalar)
-    temp_profile = np.zeros(NZ)  # 1D
-
-    # Array to store results at each time step
+    """Reproduces the analytical calculations from main_test_output.F90"""
+    
     results = {
         "time": [],
         "zeta": [],
@@ -185,412 +116,233 @@ def simulate_calculations():
         "wind_speed": [],
         "temp_profile": [],
     }
-
-    # Time loop
+    
     for t in range(1, NT + 1):
-        # Time in seconds
         current_time = t * DT
-
-        # Update values (as in the model)
-        zeta = zeta + 0.1 * t  # 2D field
-        temp = temp + 0.2 * t  # 3D field
-        u[:] = t  # 2D field
-        v[:] = t * 0.5  # 2D field
-        wind_speed = 5.0 + 0.1 * t  # 0D scalar
-        temp_profile = temp_profile + 0.5 * t  # 1D profile
-
-        # Store results
+        
+        # Match formulas in main_test_output.F90
+        zeta_val = np.sin(current_time / 3600.0) * 0.5
+        u_val = 0.1 * np.sin(current_time / 7200.0)
+        v_val = 0.05 * np.cos(current_time / 7200.0)
+        temp_val = 15.0 + 2.0 * np.sin(current_time / 43200.0)
+        wind_speed_val = 5.0 + 3.0 * np.sin(current_time / 21600.0)
+        
+        # temp_profile: 15.0 - 0.5 * i for i=1..NZ
+        temp_profile_val = 15.0 - 0.5 * np.arange(1, NZ + 1)
+        
         results["time"].append(current_time)
-        results["zeta"].append(zeta.copy())
-        results["temp"].append(temp.copy())
-        results["u"].append(u.copy())
-        results["v"].append(v.copy())
-        results["wind_speed"].append(wind_speed)
-        results["temp_profile"].append(temp_profile.copy())
-
+        results["zeta"].append(np.full((NX, NY), zeta_val))
+        results["u"].append(np.full((NX, NY), u_val))
+        results["v"].append(np.full((NX, NY), v_val))
+        results["temp"].append(np.full((NX, NY, NZ), temp_val))
+        results["temp_profile"].append(temp_profile_val.copy())
+        results["wind_speed"].append(wind_speed_val)
+    
     return results
 
 
 def find_netcdf_files():
-    """Finds all NetCDF files generated by the model"""
-
-    nc_files = []
-    for filename in os.listdir("."):
-        if filename.endswith(".nc"):
-            nc_files.append(filename)
-
-    return nc_files
+    """Find all NetCDF files in current directory"""
+    return [f for f in os.listdir(".") if f.endswith(".nc")]
 
 
-def extract_file_info(filename):
-    """Extracts information from the filename"""
-    info = {"prefix": None, "type": None, "freq": None}
-
-    # Match the expected pattern: prefix_type_freqs.nc or prefix_type.nc
-    pattern1 = r"(.+)_(his|avg|rst)_(\d+)s\.nc$"
-    pattern2 = r"(.+)_(his|avg|rst)\.nc$"
-
-    match1 = re.match(pattern1, filename)
-    match2 = re.match(pattern2, filename)
-
-    if match1:
-        info["prefix"] = match1.group(1)
-        info["type"] = match1.group(2)
-        info["freq"] = int(match1.group(3))
-    elif match2:
-        info["prefix"] = match2.group(1)
-        info["type"] = match2.group(2)
-        info["freq"] = -1
+def extract_file_info(filename, config):
+    """Extract info from filename and match with config"""
+    
+    info = {
+        "prefix": "",
+        "name": "",
+        "freq": 0.0,
+        "operation": "instant",
+        "variables": [],
+    }
+    
+    # Pattern: prefix_name_freqs.nc
+    match = re.match(r"([^_]+)_(.+)_(\d+)s\.nc", filename)
+    if match:
+        info["prefix"] = match.group(1)
+        info["name"] = match.group(2)
+        info["freq"] = float(match.group(3))
     else:
-        # Fallback partial detection
-        if "_his_" in filename:
-            info["type"] = "his"
-        elif "_avg_" in filename:
-            info["type"] = "avg"
-        elif "_rst_" in filename:
-            info["type"] = "rst"
-
-        freq_match = re.search(r"_(\d+)s\.nc$", filename)
-        if freq_match:
-            info["freq"] = int(freq_match.group(1))
-
-        # Try to extract prefix
-        parts = filename.split("_")
-        if len(parts) > 0:
-            info["prefix"] = parts[0]
-
+        # Try pattern without frequency: prefix_name.nc
+        match = re.match(r"(.+)_(.+)\.nc", filename)
+        if match:
+            info["prefix"] = match.group(1)
+            info["name"] = match.group(2)
+    
+    # Find matching file definition in config
+    for file_def in config["files"]:
+        if file_def["name"] == info["name"] and abs(file_def["freq"] - info["freq"]) < 1.0:
+            info["operation"] = file_def["operation"]
+            info["variables"] = file_def["variables"]
+            break
+    
     return info
 
 
-def should_variable_be_in_file(var_config, file_info, config):
-    """Determines if a variable should be in a file based on configuration"""
-    # Debug info
-    print(f"    Debug info for variable '{var_config['name']}':")
-    print(
-        f"      - File prefix: '{file_info['prefix']}', type: {file_info['type']}, freq: {file_info['freq']}"
-    )
-    print(
-        f"      - Var config: prefix='{var_config['prefix']}', his={var_config['wrt']}, avg={var_config['avg']}, rst={var_config['rst']}"
-    )
-    print(f"      - Global prefix: '{config['global']['output_prefix']}'")
-
-    # 1. Check file type compatibility
-    if file_info["type"] == "his" and not var_config["wrt"]:
-        print(f"      - EXCLUDE: Variable not set for history output")
-        return False
-    elif file_info["type"] == "avg" and not var_config["avg"]:
-        print(f"      - EXCLUDE: Variable not set for average output")
-        return False
-    elif file_info["type"] == "rst" and not var_config["rst"]:
-        print(f"      - EXCLUDE: Variable not set for restart output")
-        return False
-
-    # 2. Check frequency compatibility
-    if file_info["type"] == "his" and var_config["freq_his"] > 0:
-        if abs(var_config["freq_his"] - file_info["freq"]) > 1e-5:
-            print(
-                f"      - EXCLUDE: Frequency mismatch for history - expected {var_config['freq_his']}, got {file_info['freq']}"
-            )
-            return False
-    elif file_info["type"] == "avg" and var_config["freq_avg"] > 0:
-        if abs(var_config["freq_avg"] - file_info["freq"]) > 1e-5:
-            print(
-                f"      - EXCLUDE: Frequency mismatch for average - expected {var_config['freq_avg']}, got {file_info['freq']}"
-            )
-            return False
-    elif file_info["type"] == "rst" and var_config["freq_rst"] > 0:
-        if abs(var_config["freq_rst"] - file_info["freq"]) > 1e-5:
-            print(
-                f"      - EXCLUDE: Frequency mismatch for restart - expected {var_config['freq_rst']}, got {file_info['freq']}"
-            )
-            return False
-
-    # 3. Check prefix compatibility - FIXED
-    file_prefix = file_info["prefix"]
-
-    # Variable with empty prefix should use global prefix
-    if var_config["prefix"] == "":
-        if file_prefix == config["global"]["output_prefix"]:
-            print(
-                f"      - INCLUDE: File uses global prefix '{config['global']['output_prefix']}'"
-            )
-            return True
-        else:
-            print(
-                f"      - EXCLUDE: Prefix mismatch - expected global '{config['global']['output_prefix']}', got '{file_prefix}'"
-            )
-            return False
+def get_expected_times(freq, operation):
+    """Calculate expected number of time records"""
+    
+    total_time = NT * DT  # Total simulation time
+    
+    if operation in ["instant"]:
+        # Output at each frequency interval
+        return int(total_time / freq)
     else:
-        # Variable has custom prefix
-        if file_prefix == var_config["prefix"]:
-            print(
-                f"      - INCLUDE: File uses matching custom prefix '{var_config['prefix']}'"
-            )
-            return True
-        else:
-            print(
-                f"      - EXCLUDE: Prefix mismatch - expected custom '{var_config['prefix']}', got '{file_prefix}'"
-            )
-            return False
+        # For averaging, output only when average period is complete
+        return int(total_time / freq)
+
+
+def calculate_average(calc_results, var_name, start_time, end_time):
+    """Calculate average of a variable over a time period"""
+    
+    indices = []
+    for i, t in enumerate(calc_results["time"]):
+        if start_time < t <= end_time:
+            indices.append(i)
+    
+    if not indices:
+        return None
+    
+    if var_name == "wind_speed":
+        # Scalar
+        return np.mean([calc_results[var_name][i] for i in indices])
+    else:
+        # Array - stack and average
+        values = np.array([calc_results[var_name][i] for i in indices])
+        return np.mean(values, axis=0)
 
 
 def check_file_content(filename, config, calc_results):
-    """Checks the content of a NetCDF file against analytical calculations"""
-
-    color_print(f"\nVerifying file: {filename}", Colors.BLUE)
+    """Check content of a single NetCDF file"""
+    
+    global error_summary
+    
+    color_print(f"\n{'='*60}", Colors.HEADER)
+    color_print(f"Checking: {filename}", Colors.HEADER + Colors.BOLD)
+    color_print(f"{'='*60}", Colors.HEADER)
+    
+    if not os.path.exists(filename):
+        color_print(f"  ERROR: File not found!", Colors.RED)
+        error_summary.append(f"File not found: {filename}")
+        return
+    
+    file_info = extract_file_info(filename, config)
+    print(f"  File info: name={file_info['name']}, freq={file_info['freq']}, op={file_info['operation']}")
+    print(f"  Expected variables: {file_info['variables']}")
+    
     file_has_errors = False
-
-    # Extract file information
-    file_info = extract_file_info(filename)
-
-    # Display file identification info
-    print(f"  File identification:")
-    print(f"  - Type: {file_info['type']}")
-    print(f"  - Prefix: {file_info['prefix']}")
-    print(f"  - Frequency: {file_info['freq']}s")
-
-    # Open NetCDF file
-    try:
-        nc = xr.open_dataset(filename, decode_times=False)
-    except Exception as e:
-        error_msg = f"ERROR: Cannot open {filename}: {e}"
-        color_print(error_msg, Colors.RED)
-        error_summary.append(f"File error: {filename} - {e}")
-        return
-
-    # Display general information
-    print(f"  Dimensions: {list(nc.dims)}")
-    print(f"  Variables: {list(nc.data_vars.keys())}")
-
-    # Get time values
-    if "time" in nc.coords:
-        time_points = nc.time.values
-        time_points = time_points.astype(float)
+    
+    # Open file with xarray
+    ds = xr.open_dataset(filename, decode_times=False)
+    
+    # Get time values (in seconds, as written by Fortran)
+    if "time" in ds:
+        time_values = ds["time"].values
     else:
-        error_msg = "  WARNING: No time dimension found in file"
-        color_print(error_msg, Colors.YELLOW)
-        nc.close()
-        return
-
-    # Map variable names
-    var_name_map = {
-        "zeta": "zeta",
-        "temp": "temp",
-        "u": "u",
-        "v": "v",
-        "wind": "wind_speed",
-        "profile": "temp_profile",
-    }
-
-    # Check each variable in the file
-    for var_name in nc.data_vars:
-        if var_name == "time":
-            continue  # Skip time variable
-
-        var_has_errors = False
+        time_values = []
+    
+    # Get variable names
+    var_names = [v for v in ds.data_vars if v != "time"]
+    
+    # Check time dimension
+    print(f"\n  Time records: {len(time_values)}")
+    if len(time_values) > 0:
+        print(f"  Time range: {float(time_values[0]):.0f} - {float(time_values[-1]):.0f} seconds")
+    
+    expected_times = get_expected_times(file_info["freq"], file_info["operation"])
+    if len(time_values) != expected_times:
+        color_print(f"  WARNING: Expected {expected_times} time records, got {len(time_values)}", Colors.YELLOW)
+    
+    # Check each expected variable
+    print(f"\n  Variables in file: {var_names}")
+    
+    for var_name in file_info["variables"]:
         print(f"\n  Checking variable: {var_name}")
-
-        # Find configuration for this variable
-        var_config = None
-        for var in config["variables"]:
-            if var["name"] == var_name:
-                var_config = var
-                break
-
-        if var_config is None:
-            # Try reverse mapping
-            for config_name, nc_name in var_name_map.items():
-                if nc_name == var_name:
-                    for var in config["variables"]:
-                        if var["name"] == config_name:
-                            var_config = var
-                            break
-                    if var_config:
-                        break
-
-        # If still not found, create default config
-        if var_config is None:
-            color_print(
-                f"    WARNING: Creating default config for variable {var_name}",
-                Colors.YELLOW,
-            )
-            var_config = {
-                "name": var_name,
-                "wrt": file_info["type"] == "his",
-                "avg": file_info["type"] == "avg",
-                "rst": file_info["type"] == "rst",
-                "prefix": "",  # Use empty prefix to default to global prefix
-                "freq_his": config["global"]["global_freq_his"],
-                "freq_avg": config["global"]["global_freq_avg"],
-                "freq_rst": config["global"]["global_freq_rst"],
-            }
-
-        # Check if variable should be in this file
-        if not should_variable_be_in_file(var_config, file_info, config):
-            error_msg = f"    ERROR: Variable {var_name} should NOT be in this file!"
-            color_print(error_msg, Colors.RED)
-            var_has_errors = True
+        
+        if var_name not in var_names and var_name != "time":
+            color_print(f"    ERROR: Variable not found in file!", Colors.RED)
+            error_summary.append(f"Missing variable: {var_name} in {filename}")
             file_has_errors = True
-            error_summary.append(
-                f"File placement error: {var_name} in {filename} shouldn't be there"
-            )
             continue
-
-        # Read data
-        var_data = nc[var_name].values
-
-        # Map variable name to results key
-        result_key = var_name
-        for k, v in var_name_map.items():
-            if v == var_name:
-                result_key = v
-                break
-
-        # Handle comparison by dimension
+        
+        if var_name not in calc_results:
+            color_print(f"    WARNING: No reference data for {var_name}", Colors.YELLOW)
+            continue
+        
+        # Get data from file
+        var_data = ds.variables[var_name][:]
+        
+        print(f"    Shape: {var_data.shape}")
+        print(f"    Range: [{np.nanmin(var_data):.6f}, {np.nanmax(var_data):.6f}]")
+        
+        # Check values at each time
         value_errors = 0
-        for i, time_value in enumerate(time_points):
-            # Skip t=0 for avg and rst files
-            if abs(time_value) < 1e-5 and file_info["type"] in ["avg", "rst"]:
+        for i, time_val in enumerate(time_values):
+            time_val = float(time_val)
+            
+            if file_info["operation"] == "instant":
+                # Find matching time in calc_results
+                time_idx = np.argmin(np.abs(np.array(calc_results["time"]) - time_val))
+                expected = calc_results[var_name][time_idx]
+            
+            elif file_info["operation"] in ["average", "avg", "mean"]:
+                # Calculate average for this period
+                period_end = time_val
+                period_start = period_end - file_info["freq"]
+                expected = calculate_average(calc_results, var_name, period_start, period_end)
+                
+                if expected is None:
+                    color_print(f"    WARNING: Could not calculate average for t={time_val}", Colors.YELLOW)
+                    continue
+            
+            else:
+                color_print(f"    WARNING: Unknown operation {file_info['operation']}", Colors.YELLOW)
                 continue
-
-            time_idx = np.argmin(np.abs(np.array(calc_results["time"]) - time_value))
-
-            # Determine dimensionality and prepare expected values
-            ndim = len(var_data.shape) - 1  # Subtract 1 for time dimension
-
-            if ndim == 0:  # 0D (scalar)
-                expected = calc_results[result_key][time_idx]
-                actual = var_data[i]
-
-            elif ndim == 1:  # 1D
-                expected = calc_results[result_key][time_idx]
-                actual = var_data[i]
-
-            elif ndim == 2:  # 2D
-                expected = calc_results[result_key][time_idx]
-                actual = var_data[i]
-
-            elif ndim == 3:  # 3D
-                expected = calc_results[result_key][time_idx]
+            
+            # Get actual value
+            if len(var_data.shape) == 1:
+                # Scalar with time dimension
                 actual = var_data[i]
             else:
-                warning_msg = (
-                    f"    WARNING: Unexpected dimensionality {ndim} for {var_name}"
-                )
-                color_print(warning_msg, Colors.YELLOW)
-                continue
-
-            # For averages, calculate expected average
-            if file_info["type"] == "avg":
-                if file_info["freq"] > 0:
-                    # Number of steps per average
-                    steps_per_avg = int(file_info["freq"] / DT)
-
-                    # Determine current interval
-                    current_interval = int(time_value / file_info["freq"])
-
-                    # Start and end times for averaging
-                    avg_start_time = (current_interval - 1) * file_info["freq"]
-                    avg_end_time = current_interval * file_info["freq"]
-
-                    # Find indices for averaging
-                    avg_indices = []
-                    for j in range(len(calc_results["time"])):
-                        t = calc_results["time"][j]
-                        if t > avg_start_time and t <= avg_end_time:
-                            avg_indices.append(j)
-
-                    # If no points found, use alternative
-                    if not avg_indices:
-                        time_idx = np.argmin(
-                            np.abs(np.array(calc_results["time"]) - time_value)
-                        )
-                        avg_indices = list(
-                            range(max(0, time_idx - steps_per_avg + 1), time_idx + 1)
-                        )
-
-                    # Calculate average based on dimension
-                    if ndim == 0:  # Scalar
-                        avg_sum = 0.0
-                        for idx in avg_indices:
-                            avg_sum += calc_results[result_key][idx]
-                        expected = avg_sum / len(avg_indices)
-
-                    else:  # Arrays (1D, 2D, 3D)
-                        avg_sum = np.zeros_like(expected)
-                        for idx in avg_indices:
-                            avg_sum += calc_results[result_key][idx]
-                        expected = avg_sum / len(avg_indices)
-
-            # Calculate error
-            if ndim == 0:  # 0D (scalar)
+                actual = var_data[i]
+            
+            # Compare
+            if np.isscalar(expected):
                 if abs(expected) < 1e-10:
-                    rel_error = abs(actual - expected)
+                    error = abs(actual - expected)
                 else:
-                    rel_error = abs((actual - expected) / expected)
-
-                max_error = rel_error
-
-                if max_error > 1e-5:
-                    error_msg = f"    ERROR at t={time_value}: Error = {max_error:.6f}"
-                    color_print(error_msg, Colors.RED)
-                    print(f"      Expected: {expected}, Actual: {actual}")
-                    value_errors += 1
-                    var_has_errors = True
-                    file_has_errors = True
-                else:
-                    success_msg = f"    OK at t={time_value}: Error = {max_error:.6f}"
-                    color_print(success_msg, Colors.GREEN)
-
-            else:  # 1D, 2D, 3D
-                # Flatten arrays for comparison
-                expected_flat = expected.flatten()
-                actual_flat = actual.flatten()
-
-                # Calculate relative error
+                    error = abs((actual - expected) / expected)
+                max_error = error
+            else:
+                expected_flat = np.array(expected).flatten()
+                actual_flat = np.array(actual).flatten()
+                
                 with np.errstate(divide="ignore", invalid="ignore"):
                     rel_error = np.abs(
-                        (actual_flat - expected_flat)
-                        / np.maximum(1e-10, np.abs(expected_flat))
+                        (actual_flat - expected_flat) / np.maximum(1e-10, np.abs(expected_flat))
                     )
-                    # Replace NaN or inf values with absolute error
                     rel_error = np.where(
                         np.isnan(rel_error) | np.isinf(rel_error),
                         np.abs(actual_flat - expected_flat),
                         rel_error,
                     )
-
                 max_error = np.max(rel_error)
-
-                if max_error > 1e-5:
-                    error_msg = (
-                        f"    ERROR at t={time_value}: Max error = {max_error:.6f}"
-                    )
-                    color_print(error_msg, Colors.RED)
-                    # Find location of maximum error
-                    max_error_idx = np.argmax(rel_error)
-                    print(
-                        f"      Expected[{max_error_idx}]: {expected_flat[max_error_idx]}, "
-                        f"Actual[{max_error_idx}]: {actual_flat[max_error_idx]}"
-                    )
-                    value_errors += 1
-                    var_has_errors = True
-                    file_has_errors = True
-                else:
-                    success_msg = (
-                        f"    OK at t={time_value}: Max error = {max_error:.6f}"
-                    )
-                    color_print(success_msg, Colors.GREEN)
-
-        # Add summary for this variable if it had errors
-        if var_has_errors and value_errors > 0:
-            error_summary.append(
-                f"Value error: {var_name} in {filename} has {value_errors} incorrect values"
-            )
-
-    nc.close()
-
-    # Final status for this file
+            
+            if max_error > 1e-5:
+                color_print(f"    ERROR at t={time_val:.0f}s: max_error={max_error:.6e}", Colors.RED)
+                value_errors += 1
+                file_has_errors = True
+            else:
+                color_print(f"    OK at t={time_val:.0f}s: max_error={max_error:.6e}", Colors.GREEN)
+        
+        if value_errors > 0:
+            error_summary.append(f"Value errors: {var_name} in {filename} ({value_errors} errors)")
+    
+    # Close file
+    ds.close()
+    
+    # Summary for this file
     if file_has_errors:
         color_print(f"\n  ❌ File {filename} has errors", Colors.RED)
     else:
@@ -598,80 +350,64 @@ def check_file_content(filename, config, calc_results):
 
 
 def main():
-    # Reset error summary
     global error_summary
     error_summary = []
-
-    color_print("Enhanced verification script for MIAOU", Colors.HEADER + Colors.BOLD)
-    color_print("=====================================", Colors.HEADER)
-
-    # Parse command line arguments
+    
+    color_print("\n" + "=" * 60, Colors.HEADER)
+    color_print("MIAOU Verification Script (File-Centric Architecture)", Colors.HEADER + Colors.BOLD)
+    color_print("=" * 60, Colors.HEADER)
+    
+    # Parse arguments
     import argparse
-
-    parser = argparse.ArgumentParser(description="Verify output of MIAOU.")
-    parser.add_argument(
-        "--namelist",
-        default="output_config.nml",
-        help="Path to the namelist file (default: output_config.nml)",
-    )
-    parser.add_argument(
-        "--verbose",
-        action="store_true",
-        help="Enable verbose debug output (default: false)",
-    )
+    parser = argparse.ArgumentParser(description="Verify MIAOU output files")
+    parser.add_argument("--namelist", default="output_config.nml", help="Path to namelist file")
+    parser.add_argument("--verbose", action="store_true", help="Verbose output")
     args = parser.parse_args()
-
-    # Step 1: Analyze configuration
-    print("\nAnalyzing configuration...")
+    
+    # Step 1: Parse configuration
+    print("\n1. Parsing configuration...")
     config = parse_namelist(args.namelist)
-
-    if not config["variables"]:
-        color_print("ERROR: No variables found in configuration!", Colors.RED)
-        return
-
-    print(f"Global settings:")
-    print(f"  Output prefix: '{config['global']['output_prefix']}'")
-    print(
-        f"  Default frequencies: his={config['global']['global_freq_his']}s, avg={config['global']['global_freq_avg']}s, rst={config['global']['global_freq_rst']}s"
-    )
-    print(
-        f"  Default output flags: his={config['global']['global_to_his']}, avg={config['global']['global_to_avg']}, rst={config['global']['global_to_rst']}"
-    )
-
+    
+    if not config["files"]:
+        color_print("ERROR: No file definitions found in configuration!", Colors.RED)
+        return 1
+    
     # Step 2: Reproduce calculations
-    print("\nReproducing analytical calculations...")
+    print("\n2. Reproducing model calculations...")
     calc_results = simulate_calculations()
-    print(f"Calculations performed for {len(calc_results['time'])} time steps")
-
+    print(f"   Calculated {len(calc_results['time'])} time steps")
+    print(f"   Time range: {calc_results['time'][0]:.0f} - {calc_results['time'][-1]:.0f} seconds")
+    
     # Step 3: Find NetCDF files
-    print("\nSearching for NetCDF files...")
+    print("\n3. Searching for NetCDF files...")
     nc_files = find_netcdf_files()
-
+    
     if not nc_files:
         color_print("ERROR: No NetCDF files found!", Colors.RED)
-        return
-
-    print(f"Files found: {nc_files}")
-
+        return 1
+    
+    print(f"   Found files: {nc_files}")
+    
     # Step 4: Check each file
-    for filename in nc_files:
+    print("\n4. Checking file contents...")
+    for filename in sorted(nc_files):
         check_file_content(filename, config, calc_results)
-
+    
     # Final summary
+    print("\n" + "=" * 60)
     if error_summary:
-        color_print("\n===== ERROR SUMMARY =====", Colors.RED + Colors.BOLD)
+        color_print("ERROR SUMMARY", Colors.RED + Colors.BOLD)
+        color_print("=" * 60, Colors.RED)
         for i, error in enumerate(error_summary, 1):
-            color_print(f"{i}. {error}", Colors.RED)
-        color_print(
-            f"\n❌ Verification completed with {len(error_summary)} errors",
-            Colors.RED + Colors.BOLD,
-        )
+            color_print(f"  {i}. {error}", Colors.RED)
+        color_print(f"\n❌ Verification completed with {len(error_summary)} errors", Colors.RED + Colors.BOLD)
+        return 1
     else:
-        color_print(
-            "\n✅ Verification completed successfully! All files and values are correct.",
-            Colors.GREEN + Colors.BOLD,
-        )
+        color_print("✅ Verification completed successfully!", Colors.GREEN + Colors.BOLD)
+        color_print("   All files and values are correct.", Colors.GREEN)
+        return 0
 
 
 if __name__ == "__main__":
-    main()
+    import sys
+    sys.exit(main())

@@ -12,7 +12,7 @@
 !===============================================================================
 module var_definitions
    use grid_module, only: grid
-   use io_definitions, only: io_variable, var_metadata, var_data_ptr
+   use io_definitions, only: io_variable
    use ocean_var
    implicit none
    private

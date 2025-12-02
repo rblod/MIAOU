@@ -1,687 +1,452 @@
 !===============================================================================
 !> @file io_manager.F90
 !>
-!> High-level I/O management module
+!> @brief High-level I/O management module
 !>
-!> This module provides a unified interface for I/O operations, independent
-!> of the specific backend implementation. It serves as the central coordinator
-!> for variable registration, file management, and data output.
+!> This module provides a unified interface for I/O operations. It coordinates
+!> variable registration, file management, and data output using a file-centric
+!> approach where output files define which variables they contain.
 !>
-!> REFACTORED:
-!> - Single file registry (removed duplication with io_netcdf)
-!> - Use pointers to modify variables in registry (fix avg accumulation bug)
-!> - Improved error handling with status propagation
+!> ## Main workflow
+!>
+!> 1. `initialize_io()` — Read config, setup backend
+!> 2. `register_variable()` — Register model variables
+!> 3. `write_output(time)` — Called each timestep, handles all files
+!> 4. `finalize_io()` — Close files, cleanup
 !>
 !> @author Rachid Benshila
-!> @date 2025-04-11
+!> @date 2025-04
 !===============================================================================
 module io_manager
-   use io_constants, only: IO_TIME_TOLERANCE, IO_PATH_LEN, IO_PREFIX_LEN, &
-                           IO_NUM_FILE_TYPES, IO_INITIAL_ALLOC
-   use io_definitions, only: io_variable, file_descriptor, io_var_registry, &
-                             output_stream, STREAM_HIS, STREAM_AVG, STREAM_RST
-   use io_config, only: read_io_config, apply_config_to_variable, get_output_prefix
+   use io_constants, only: IO_TIME_TOLERANCE, IO_PATH_LEN, IO_PREFIX_LEN
+   use io_definitions, only: io_variable, io_var_registry
+   use io_config, only: read_io_config, get_output_prefix, get_time_units, &
+                        get_calendar, file_registry
+   use io_file_registry, only: output_file_def, output_file_registry, avg_state, &
+                               OP_INSTANT, OP_AVERAGE, OP_MIN, OP_MAX, OP_ACCUMULATE
    use io_naming, only: generate_filename
    use io_netcdf, only: nc_initialize, nc_finalize, nc_create_file, &
                         nc_write_variable_data, nc_write_time, &
                         nc_close_file, nc_define_variable_in_file, &
-                        nc_end_definition, get_varid_for_variable
-   use io_netcdf_avg, only: accumulate_avg, write_variable_avg, reset_avg
+                        nc_end_definition, nc_write_avg_data
 
    implicit none
    private
 
    ! Public interface
    public :: initialize_io, finalize_io
-   public :: register_variable, write_data, write_all_data
-   public :: get_io_status
+   public :: register_variable
+   public :: write_output
+   public :: get_variable_ptr
 
-   ! Registry for variables - made public for direct access if needed
+   ! Variable registry
    type(io_var_registry), public, target :: var_registry
-
-   ! Array of open files (single source of truth)
-   type(file_descriptor), allocatable, target :: open_files(:)
-   integer :: num_files = 0
-
-   ! Time configuration storage
-   character(len=IO_PATH_LEN), private :: stored_time_units = "seconds since 2023-01-01 00:00:00"
-   character(len=IO_PATH_LEN), private :: stored_calendar = "gregorian"
 
    ! Module state
    logical, private :: is_initialized = .false.
-   integer, private :: last_error = 0
-   character(len=256), private :: last_error_msg = ""
+   logical, private :: files_created = .false.
 
 contains
 
    !---------------------------------------------------------------------------
-   ! Status and error handling
-   !---------------------------------------------------------------------------
-
-   !> Get the last error status
+   !> @brief Initialize the I/O system
    !>
-   !> @param[out] error_msg  Optional: retrieve error message
-   !> @return     Last error code (0 = no error)
-   function get_io_status(error_msg) result(status)
-      character(len=*), intent(out), optional :: error_msg
-      integer :: status
-
-      status = last_error
-      if (present(error_msg)) then
-         error_msg = last_error_msg
-      end if
-   end function get_io_status
-
-   !> Set error status
-   !>
-   !> @param[in] code  Error code
-   !> @param[in] msg   Error message
-   subroutine set_error(code, msg)
-      integer, intent(in) :: code
-      character(len=*), intent(in) :: msg
-
-      last_error = code
-      last_error_msg = msg
-      if (code /= 0) then
-         print *, "IO_MANAGER ERROR [", code, "]: ", trim(msg)
-      end if
-   end subroutine set_error
-
-   !> Clear error status
-   subroutine clear_error()
-      last_error = 0
-      last_error_msg = ""
-   end subroutine clear_error
-
+   !> @param[in] config_file  Optional path to configuration file
+   !> @return    Status (0 = success)
    !---------------------------------------------------------------------------
-   ! Initialization and cleanup
-   !---------------------------------------------------------------------------
-
-   !> Initialize the I/O system
-   !>
-   !> @param[in] config_file  Optional: path to configuration file
-   !> @param[in] time_units   Optional: units for time axis
-   !> @param[in] calendar     Optional: calendar type for time
-   !> @return    Status code (0 = success)
-   function initialize_io(config_file, time_units, calendar) result(status)
+   function initialize_io(config_file) result(status)
       character(len=*), intent(in), optional :: config_file
-      character(len=*), intent(in), optional :: time_units, calendar
       integer :: status
 
-      character(len=256) :: config_path
+      status = 0
 
-      call clear_error()
-
-      ! Set default configuration file path
-      if (present(config_file)) then
-         config_path = config_file
-      else
-         config_path = "output_config.nml"
-      end if
-
-      ! Store time units and calendar for later use
-      if (present(time_units)) then
-         stored_time_units = time_units
-      end if
-
-      if (present(calendar)) then
-         stored_calendar = calendar
-      end if
-
-      ! Initialize the NetCDF backend
-      status = nc_initialize()
-      if (status /= 0) then
-         call set_error(status, "Failed to initialize NetCDF backend")
-         return
-      end if
+      ! Initialize NetCDF backend
+      call nc_initialize()
 
       ! Read configuration
-      status = read_io_config(config_path)
-      if (status /= 0) then
-         print *, "Warning: Configuration read failed, using defaults"
-         ! Not a fatal error, continue with defaults
+      if (present(config_file)) then
+         status = read_io_config(config_file)
+      else
+         status = read_io_config("output_config.nml")
       end if
 
-      ! Initialize file registry
-      if (allocated(open_files)) deallocate(open_files)
-      num_files = 0
-
       is_initialized = .true.
-      status = 0
+      files_created = .false.
+
+      print *, "I/O system initialized"
    end function initialize_io
 
-   !> Finalize the I/O system
+   !---------------------------------------------------------------------------
+   !> @brief Finalize the I/O system
    !>
-   !> @return Status code (0 = success)
+   !> @return Status (0 = success)
+   !---------------------------------------------------------------------------
    function finalize_io() result(status)
-      integer :: status, i, close_status
+      integer :: status
+      integer :: i
+      type(output_file_def), pointer :: file_ptr
 
       status = 0
 
       ! Close all open files
-      if (allocated(open_files)) then
-         do i = 1, num_files
-            if (open_files(i)%is_open()) then
-               close_status = nc_close_file(open_files(i))
-               if (close_status /= 0) then
-                  status = -1  ! Record that at least one close failed
-               end if
+      do i = 1, file_registry%size()
+         file_ptr => file_registry%get_ptr(i)
+         if (associated(file_ptr)) then
+            if (file_ptr%is_open()) then
+               status = nc_close_file(file_ptr%backend_id)
+               file_ptr%backend_id = -1
             end if
-         end do
-         deallocate(open_files)
-         num_files = 0
-      end if
+         end if
+      end do
 
-      ! Finalize NetCDF backend
-      close_status = nc_finalize()
-      if (close_status /= 0) status = -1
-
+      call nc_finalize()
       is_initialized = .false.
+
+      print *, "I/O system finalized"
    end function finalize_io
 
    !---------------------------------------------------------------------------
-   ! Variable registration
-   !---------------------------------------------------------------------------
-
-   !> Register a variable for output
+   !> @brief Register a variable for output
    !>
    !> @param[in] var  Variable to register
+   !---------------------------------------------------------------------------
    subroutine register_variable(var)
       type(io_variable), intent(in) :: var
 
-      type(io_variable) :: var_copy
-
-      ! Apply configuration to variable
-      var_copy = var
-      call apply_config_to_variable(var_copy)
-
-      ! Add to registry
-      call var_registry%add(var_copy)
+      call var_registry%add(var)
+      print *, "Registered variable: ", trim(var%meta%name)
    end subroutine register_variable
 
    !---------------------------------------------------------------------------
-   ! File management
+   !> @brief Get pointer to a registered variable by name
+   !>
+   !> @param[in] var_name  Variable name
+   !> @return    Pointer to variable, or null if not found
    !---------------------------------------------------------------------------
-
-   !> Add a file to the registry of open files
-   !>
-   !> @param[in] file_desc  File descriptor to add
-   subroutine add_to_open_files(file_desc)
-      type(file_descriptor), intent(in) :: file_desc
-      type(file_descriptor), allocatable :: temp(:)
-      integer :: n
-
-      if (.not. allocated(open_files)) then
-         allocate(open_files(IO_INITIAL_ALLOC))  ! Pre-allocate space
-         num_files = 1
-         open_files(1) = file_desc
-      else if (num_files >= size(open_files)) then
-         ! Need to expand
-         n = size(open_files)
-         allocate(temp(n + IO_INITIAL_ALLOC))
-         temp(1:n) = open_files
-         call move_alloc(temp, open_files)
-         num_files = num_files + 1
-         open_files(num_files) = file_desc
-      else
-         num_files = num_files + 1
-         open_files(num_files) = file_desc
-      end if
-   end subroutine add_to_open_files
-
-   !> Check if a file exists in the registry
-   !>
-   !> @param[in] filename  Name of the file to check
-   !> @return    True if file exists, false otherwise
-   function file_exists(filename) result(exists)
-      character(len=*), intent(in) :: filename
-      logical :: exists
-      integer :: i
-
-      exists = .false.
-      if (allocated(open_files)) then
-         do i = 1, num_files
-            if (trim(open_files(i)%filename) == trim(filename)) then
-               exists = .true.
-               return
-            end if
-         end do
-      end if
-   end function file_exists
-
-   !> Get a pointer to an open file by index
-   !>
-   !> @param[in] idx  Index of the file
-   !> @return    Pointer to file descriptor, or null if invalid
-   function get_file_ptr(idx) result(file_ptr)
-      integer, intent(in) :: idx
-      type(file_descriptor), pointer :: file_ptr
-
-      if (allocated(open_files) .and. idx > 0 .and. idx <= num_files) then
-         file_ptr => open_files(idx)
-      else
-         nullify(file_ptr)
-      end if
-   end function get_file_ptr
-
-   !> Create all necessary output files for registered variables
-   !>
-   !> @param[in] time_units  Optional: units for time axis
-   !> @param[in] calendar    Optional: calendar type for time
-   !> @return    Number of files created
-   function create_output_files(time_units, calendar) result(files_created)
-      character(len=*), intent(in), optional :: time_units, calendar
-      integer :: files_created
-
-      integer :: var_idx, stream_idx, status
-      character(len=IO_PATH_LEN) :: filename, prefix
+   function get_variable_ptr(var_name) result(var_ptr)
+      character(len=*), intent(in) :: var_name
       type(io_variable), pointer :: var_ptr
-      type(output_stream) :: stream
-      type(file_descriptor) :: file_desc
-      character(len=IO_PATH_LEN) :: local_time_units, local_calendar
+      integer :: idx
 
-      files_created = 0
+      nullify(var_ptr)
+      idx = var_registry%find(var_name)
+      if (idx > 0) then
+         var_ptr => var_registry%get_ptr(idx)
+      end if
+   end function get_variable_ptr
 
-      ! Use stored values or provided ones
-      if (present(time_units)) then
-         local_time_units = time_units
-      else
-         local_time_units = stored_time_units
+   !---------------------------------------------------------------------------
+   !> @brief Write output for all files at current time
+   !>
+   !> This is the main entry point called each timestep. It:
+   !> 1. Creates files if not yet done
+   !> 2. Accumulates data for averaging files
+   !> 3. Writes data to files when their output time is reached
+   !>
+   !> @param[in] current_time  Current simulation time (seconds)
+   !> @param[in] is_final      Optional: true if this is the last timestep
+   !> @return    Status (0 = success)
+   !---------------------------------------------------------------------------
+   function write_output(current_time, is_final) result(status)
+      real, intent(in) :: current_time
+      logical, intent(in), optional :: is_final
+      integer :: status
+
+      integer :: file_idx
+      type(output_file_def), pointer :: file_ptr
+      logical :: final_step
+
+      status = 0
+      final_step = .false.
+      if (present(is_final)) final_step = is_final
+
+      ! Create files on first call
+      if (.not. files_created) then
+         call create_all_files()
+         files_created = .true.
       end if
 
-      if (present(calendar)) then
-         local_calendar = calendar
-      else
-         local_calendar = stored_calendar
-      end if
+      ! Process each file
+      do file_idx = 1, file_registry%size()
+         file_ptr => file_registry%get_ptr(file_idx)
+         if (.not. associated(file_ptr)) cycle
 
-      ! For each variable in the registry
-      do var_idx = 1, var_registry%size()
+         call process_file(file_ptr, current_time, final_step)
+      end do
+
+   end function write_output
+
+   !---------------------------------------------------------------------------
+   !> @brief Create all output files
+   !---------------------------------------------------------------------------
+   subroutine create_all_files()
+      integer :: file_idx, status
+      type(output_file_def), pointer :: file_ptr
+      character(len=IO_PATH_LEN) :: filename
+
+      do file_idx = 1, file_registry%size()
+         file_ptr => file_registry%get_ptr(file_idx)
+         if (.not. associated(file_ptr)) cycle
+
+         ! Generate filename
+         filename = generate_filename(file_ptr%prefix, file_ptr%name, file_ptr%frequency)
+         file_ptr%filename = filename
+
+         ! Create the file
+         status = nc_create_file(filename, file_ptr%name, file_ptr%frequency, &
+                                 get_time_units(), get_calendar(), &
+                                 file_ptr%backend_id, file_ptr%time_dimid, &
+                                 file_ptr%time_varid)
+
+         if (status /= 0) then
+            print *, "ERROR: Failed to create file: ", trim(filename)
+            cycle
+         end if
+
+         ! Define variables in file
+         call define_variables_in_file(file_ptr)
+
+         ! End definition mode
+         status = nc_end_definition(file_ptr%backend_id)
+
+         print *, "Created file: ", trim(filename)
+      end do
+   end subroutine create_all_files
+
+   !---------------------------------------------------------------------------
+   !> @brief Define variables for a file
+   !---------------------------------------------------------------------------
+   subroutine define_variables_in_file(file_ptr)
+      type(output_file_def), pointer, intent(inout) :: file_ptr
+
+      integer :: i, var_idx, status
+      type(io_variable), pointer :: var_ptr
+      character(len=32) :: var_name
+
+      do i = 1, file_ptr%num_variables
+         var_name = file_ptr%variables(i)
+
+         ! Find variable in registry
+         var_idx = var_registry%find(var_name)
+         if (var_idx < 0) then
+            print *, "Warning: Variable ", trim(var_name), " not registered, skipping"
+            cycle
+         end if
+
          var_ptr => var_registry%get_ptr(var_idx)
          if (.not. associated(var_ptr)) cycle
 
-         ! For each output stream
-         do stream_idx = 1, IO_NUM_FILE_TYPES
-            stream = var_ptr%streams(stream_idx)
-
-            ! Skip inactive streams
-            if (.not. stream%is_active()) cycle
-
-            ! Determine prefix
-            if (trim(stream%prefix) == "") then
-               prefix = get_output_prefix()
-            else
-               prefix = stream%prefix
-            end if
-
-            ! Generate filename
-            filename = generate_filename(prefix, stream%stream_type, stream%frequency)
-
-            ! Check if file already exists in our list
-            if (file_exists(filename)) cycle
-
-            ! Create the file
-            status = nc_create_file(filename, stream%stream_type, stream%frequency, &
-                                   local_time_units, local_calendar, file_desc)
-
-            if (status /= 0) then
-               call set_error(status, "Failed to create file: "//trim(filename))
-               cycle
-            end if
-
-            ! Define all applicable variables in this file
-            call define_variables_in_file(file_desc, stream%stream_type)
-
-            ! End definition mode
-            status = nc_end_definition(file_desc)
-            if (status /= 0) then
-               call set_error(status, "Failed to end definition for: "//trim(filename))
-            end if
-
-            ! Add to our file list
-            call add_to_open_files(file_desc)
-            files_created = files_created + 1
-
-            print *, "Created file: ", trim(filename)
-         end do
-      end do
-   end function create_output_files
-
-   !> Define all applicable variables in a file
-   !>
-   !> @param[in] file_desc  File descriptor
-   !> @param[in] file_type  Type of file ("his", "avg", "rst")
-   subroutine define_variables_in_file(file_desc, file_type)
-      type(file_descriptor), intent(in) :: file_desc
-      character(len=*), intent(in) :: file_type
-
-      integer :: i, stream_idx, status
-      type(io_variable), pointer :: var_ptr
-      type(output_stream) :: stream
-      character(len=IO_PREFIX_LEN) :: expected_prefix
-
-      ! Determine stream index from file type
-      stream_idx = get_stream_index(file_type)
-      if (stream_idx < 1) return
-
-      do i = 1, var_registry%size()
-         var_ptr => var_registry%get_ptr(i)
-         if (.not. associated(var_ptr)) cycle
-
-         ! Get stream for this file type
-         stream = var_ptr%streams(stream_idx)
-
-         ! Skip if stream not active
-         if (.not. stream%is_active()) cycle
-
-         ! Determine expected prefix for this variable
-         if (trim(stream%prefix) /= "") then
-            expected_prefix = trim(stream%prefix)
-         else
-            expected_prefix = trim(get_output_prefix())
+         ! Define in file
+         status = nc_define_variable_in_file(file_ptr%backend_id, file_ptr%time_dimid, var_ptr)
+         if (status /= 0) then
+            print *, "Warning: Failed to define variable ", trim(var_name)
          end if
 
-         ! Check if this variable belongs in this file (prefix match)
-         if (index(file_desc%filename, trim(expected_prefix)) /= 1) cycle
-
-         ! Define the variable in the file
-         status = nc_define_variable_in_file(file_desc, var_ptr)
-         if (status /= 0) then
-            print *, "Warning: Failed to define variable ", trim(var_ptr%meta%name), &
-                     " in file ", trim(file_desc%filename)
+         ! Initialize averaging state if needed
+         if (file_ptr%needs_averaging()) then
+            call init_avg_state_for_var(file_ptr, var_ptr)
          end if
       end do
    end subroutine define_variables_in_file
 
-   !> Get stream index from file type string
-   !>
-   !> @param[in] file_type  File type ("his", "avg", "rst")
-   !> @return    Stream index or -1 if invalid
-   function get_stream_index(file_type) result(idx)
-      character(len=*), intent(in) :: file_type
-      integer :: idx
+   !---------------------------------------------------------------------------
+   !> @brief Initialize averaging state for a variable
+   !---------------------------------------------------------------------------
+   subroutine init_avg_state_for_var(file_ptr, var_ptr)
+      type(output_file_def), pointer, intent(inout) :: file_ptr
+      type(io_variable), pointer, intent(in) :: var_ptr
 
-      select case (trim(file_type))
-      case ("his")
-         idx = STREAM_HIS
-      case ("avg")
-         idx = STREAM_AVG
-      case ("rst")
-         idx = STREAM_RST
-      case default
-         idx = -1
-      end select
-   end function get_stream_index
+      type(avg_state), pointer :: state_ptr
+      integer :: shp(3)
+
+      state_ptr => file_ptr%get_avg_state(var_ptr%meta%name)
+      if (.not. associated(state_ptr)) return
+      if (state_ptr%initialized) return
+
+      ! Get data shape and initialize
+      call var_ptr%data%get_shape(var_ptr%meta%ndims, shp)
+      call state_ptr%init(var_ptr%meta%name, file_ptr%operation, var_ptr%meta%ndims, shp)
+   end subroutine init_avg_state_for_var
 
    !---------------------------------------------------------------------------
-   ! Data writing
+   !> @brief Process a single file at current time
    !---------------------------------------------------------------------------
-
-   !> Write data for a specific variable at the current time
-   !>
-   !> @param[in] var_name     Name of the variable to write
-   !> @param[in] current_time Current model time in seconds
-   !> @return    Status code (0 = success)
-   function write_data(var_name, current_time) result(status)
-      character(len=*), intent(in) :: var_name
+   subroutine process_file(file_ptr, current_time, is_final)
+      type(output_file_def), pointer, intent(inout) :: file_ptr
       real, intent(in) :: current_time
-      integer :: status
+      logical, intent(in) :: is_final
 
-      integer :: var_idx, file_idx
-      type(io_variable), pointer :: var_ptr
-      type(file_descriptor), pointer :: file_ptr
+      logical :: is_write_time
 
-      status = -1
+      if (.not. file_ptr%is_open()) return
 
-      ! Find the variable in the registry
-      var_idx = var_registry%find(var_name)
-      if (var_idx < 0) then
-         call set_error(-1, "Variable not found: "//trim(var_name))
-         return
-      end if
+      ! Check if it's time to write
+      is_write_time = is_output_time(current_time, file_ptr%frequency)
 
-      var_ptr => var_registry%get_ptr(var_idx)
-      if (.not. associated(var_ptr)) return
+      ! For averaging files: always accumulate, write when time
+      if (file_ptr%needs_averaging()) then
+         call accumulate_file_data(file_ptr)
 
-      ! Process all open files
-      do file_idx = 1, num_files
-         file_ptr => get_file_ptr(file_idx)
-         if (.not. associated(file_ptr)) cycle
-
-         ! Determine if this variable should be written to this file
-         if (should_write_to_file(var_ptr, file_ptr, current_time)) then
-            status = nc_write_variable_data(file_ptr, var_ptr)
-            if (status == 0) then
-               status = nc_write_time(file_ptr, current_time)
-            end if
+         if (is_write_time ) then
+         !if (is_write_time .or. is_final) then
+            call write_file_averaged(file_ptr, current_time)
+            call reset_file_averaging(file_ptr)
          end if
-      end do
-
-      status = 0
-   end function write_data
-
-   !> Write all registered variables at the current time
-   !>
-   !> @param[in] current_time  Current model time in seconds
-   !> @param[in] is_final_step Optional: flag indicating if this is the final time step
-   !> @return    Status code (0 = success)
-   function write_all_data(current_time, is_final_step) result(status)
-      real, intent(in) :: current_time
-      logical, intent(in), optional :: is_final_step
-      integer :: status
-
-      integer :: var_idx, file_idx
-      type(io_variable), pointer :: var_ptr
-      type(file_descriptor), pointer :: file_ptr
-      logical :: final_step, any_written
-      logical, allocatable :: is_write_time(:)
-
-      status = 0
-      final_step = .false.
-      if (present(is_final_step)) final_step = is_final_step
-
-      ! Create output files if they don't exist yet
-      if (num_files == 0) then
-         if (create_output_files() == 0) then
-            call set_error(-1, "No output files created")
-            status = -1
-            return
+      else
+         ! Instantaneous: just write when time
+         if (is_write_time) then
+            call write_file_instant(file_ptr, current_time)
          end if
       end if
 
-      ! Pre-calculate write times for each file
-      allocate(is_write_time(num_files))
-      do file_idx = 1, num_files
-         file_ptr => get_file_ptr(file_idx)
-         if (.not. associated(file_ptr)) then
-            is_write_time(file_idx) = .false.
-            cycle
-         end if
-
-         ! For restart files, force writing on final step
-         if (trim(file_ptr%type) == "rst" .and. final_step) then
-            is_write_time(file_idx) = .true.
-         else
-            is_write_time(file_idx) = is_output_time(current_time, file_ptr%freq)
-         end if
-      end do
-
-      ! First, accumulate averages for all variables (using pointers!)
-      do var_idx = 1, var_registry%size()
-         var_ptr => var_registry%get_ptr(var_idx)
-         if (.not. associated(var_ptr)) cycle
-
-         ! Only accumulate for variables that need averages
-         if (var_ptr%needs_averaging()) then
-            call accumulate_avg(var_ptr)
-         end if
-      end do
-
-      ! Process all open files
-      do file_idx = 1, num_files
-         file_ptr => get_file_ptr(file_idx)
-         if (.not. associated(file_ptr)) cycle
-
-         any_written = .false.
-
-         ! Process all variables for this file
-         do var_idx = 1, var_registry%size()
-            var_ptr => var_registry%get_ptr(var_idx)
-            if (.not. associated(var_ptr)) cycle
-
-            ! Write variable if needed
-            call write_var_to_file(file_ptr, var_ptr, final_step, &
-                                   is_write_time(file_idx), any_written)
-         end do
-
-         ! Write time value if any variables were written
-         if (any_written) then
-            status = nc_write_time(file_ptr, current_time)
-         end if
-      end do
-
-      deallocate(is_write_time)
-   end function write_all_data
-
-   !> Write a variable to a file if appropriate
-   !>
-   !> @param[inout] file_ptr      Pointer to file descriptor
-   !> @param[inout] var_ptr       Pointer to variable
-   !> @param[in]    is_final_step Flag indicating final step
-   !> @param[in]    is_write_time Flag indicating it's time to write
-   !> @param[inout] any_written   Set to true if data was written
-   subroutine write_var_to_file(file_ptr, var_ptr, is_final_step, is_write_time, any_written)
-      type(file_descriptor), pointer, intent(inout) :: file_ptr
-      type(io_variable), pointer, intent(inout) :: var_ptr
-      logical, intent(in) :: is_final_step, is_write_time
-      logical, intent(inout) :: any_written
-
-      integer :: varid, stream_idx
-      type(output_stream) :: stream
-
-      ! Check if this variable belongs to this file
-      if (.not. belongs_to_file(var_ptr, file_ptr)) return
-
-      ! Get stream index for this file type
-      stream_idx = get_stream_index(file_ptr%type)
-      if (stream_idx < 1) return
-
-      stream = var_ptr%streams(stream_idx)
-
-      ! Skip if stream not active
-      if (.not. stream%is_active()) return
-
-      ! Case 1: Final step restart files
-      if (is_final_step .and. stream_idx == STREAM_RST) then
-         if (nc_write_variable_data(file_ptr, var_ptr) == 0) any_written = .true.
-         return
-      end if
-
-      ! Case 2: Regular write time
-      if (.not. is_write_time) return
-
-      select case (stream_idx)
-      case (STREAM_HIS)
-         if (nc_write_variable_data(file_ptr, var_ptr) == 0) any_written = .true.
-
-      case (STREAM_AVG)
-         varid = get_varid_for_variable(var_ptr, file_ptr%backend_id)
-         if (write_variable_avg(var_ptr, file_ptr%backend_id, varid, &
-                                file_ptr%time_index) == 0) then
-            any_written = .true.
-            call reset_avg(var_ptr)
-         end if
-
-      case (STREAM_RST)
-         if (nc_write_variable_data(file_ptr, var_ptr) == 0) any_written = .true.
-      end select
-   end subroutine write_var_to_file
+   end subroutine process_file
 
    !---------------------------------------------------------------------------
-   ! Helper functions
+   !> @brief Check if it's time to write
    !---------------------------------------------------------------------------
-
-   !> Check if it's time to write based on frequency
-   !>
-   !> @param[in] current_time  Current model time
-   !> @param[in] freq          Output frequency
-   !> @return    True if it's time to write
    function is_output_time(current_time, freq) result(is_time)
       real, intent(in) :: current_time, freq
       logical :: is_time
 
       if (freq <= 0.0) then
          is_time = .false.
+      else if (abs(current_time) < IO_TIME_TOLERANCE) then
+         is_time = .true.  ! Always write at t=0
       else
-         is_time = abs(mod(current_time, freq)) < IO_TIME_TOLERANCE
+         is_time = (abs(mod(current_time, freq)) < IO_TIME_TOLERANCE)
       end if
    end function is_output_time
 
-   !> Determine if a variable should be written to a file at the current time
-   !>
-   !> @param[in] var_ptr       Pointer to variable
-   !> @param[in] file_ptr      Pointer to file descriptor
-   !> @param[in] current_time  Current model time
-   !> @return    True if variable should be written to this file
-   function should_write_to_file(var_ptr, file_ptr, current_time) result(should_write)
-      type(io_variable), pointer, intent(in) :: var_ptr
-      type(file_descriptor), pointer, intent(in) :: file_ptr
+   !---------------------------------------------------------------------------
+   !> @brief Accumulate data for all variables in an averaging file
+   !---------------------------------------------------------------------------
+   subroutine accumulate_file_data(file_ptr)
+      type(output_file_def), pointer, intent(inout) :: file_ptr
+
+      integer :: i, var_idx
+      type(io_variable), pointer :: var_ptr
+      type(avg_state), pointer :: state_ptr
+
+      do i = 1, file_ptr%num_variables
+         var_idx = var_registry%find(file_ptr%variables(i))
+         if (var_idx < 0) cycle
+
+         var_ptr => var_registry%get_ptr(var_idx)
+         if (.not. associated(var_ptr)) cycle
+
+         state_ptr => file_ptr%get_avg_state(var_ptr%meta%name)
+         if (.not. associated(state_ptr)) cycle
+
+         ! Initialize if not done
+         if (.not. state_ptr%initialized) then
+            call init_avg_state_for_var(file_ptr, var_ptr)
+         end if
+
+         ! Accumulate based on dimensionality
+         select case (var_ptr%meta%ndims)
+         case (0)
+            if (var_ptr%data%is_valid(0)) then
+               call state_ptr%accumulate_scalar(var_ptr%data%scalar)
+            end if
+         case (1)
+            if (var_ptr%data%is_valid(1)) then
+               call state_ptr%accumulate_1d(var_ptr%data%d1)
+            end if
+         case (2)
+            if (var_ptr%data%is_valid(2)) then
+               call state_ptr%accumulate_2d(var_ptr%data%d2)
+            end if
+         case (3)
+            if (var_ptr%data%is_valid(3)) then
+               call state_ptr%accumulate_3d(var_ptr%data%d3)
+            end if
+         end select
+      end do
+   end subroutine accumulate_file_data
+
+   !---------------------------------------------------------------------------
+   !> @brief Write instantaneous data for all variables in a file
+   !---------------------------------------------------------------------------
+   subroutine write_file_instant(file_ptr, current_time)
+      type(output_file_def), pointer, intent(inout) :: file_ptr
       real, intent(in) :: current_time
-      logical :: should_write
 
-      integer :: stream_idx
-      type(output_stream) :: stream
+      integer :: i, var_idx, status
+      type(io_variable), pointer :: var_ptr
+      logical :: any_written
 
-      should_write = .false.
+      any_written = .false.
 
-      ! First check if the variable belongs to this file
-      if (.not. belongs_to_file(var_ptr, file_ptr)) return
+      do i = 1, file_ptr%num_variables
+         var_idx = var_registry%find(file_ptr%variables(i))
+         if (var_idx < 0) cycle
 
-      ! Get stream index for this file type
-      stream_idx = get_stream_index(file_ptr%type)
-      if (stream_idx < 1) return
+         var_ptr => var_registry%get_ptr(var_idx)
+         if (.not. associated(var_ptr)) cycle
 
-      stream = var_ptr%streams(stream_idx)
+         status = nc_write_variable_data(file_ptr%backend_id, file_ptr%time_index, var_ptr)
+         if (status == 0) any_written = .true.
+      end do
 
-      ! Check if stream is active
-      if (.not. stream%is_active()) return
-
-      ! Determine if we should write at this time step
-      if (abs(current_time) < IO_TIME_TOLERANCE) then
-         ! First time step - only write history
-         should_write = (stream_idx == STREAM_HIS)
-      else
-         should_write = stream%should_write(current_time)
+      if (any_written) then
+         status = nc_write_time(file_ptr%backend_id, file_ptr%time_varid, &
+                                file_ptr%time_index, current_time)
+         call file_ptr%increment_time()
       end if
-   end function should_write_to_file
+   end subroutine write_file_instant
 
-   !> Check if a variable belongs to a file based on prefix
-   !>
-   !> @param[in] var_ptr   Pointer to variable
-   !> @param[in] file_ptr  Pointer to file descriptor
-   !> @return    True if the variable belongs to this file
-   function belongs_to_file(var_ptr, file_ptr) result(belongs)
-      type(io_variable), pointer, intent(in) :: var_ptr
-      type(file_descriptor), pointer, intent(in) :: file_ptr
-      logical :: belongs
+   !---------------------------------------------------------------------------
+   !> @brief Write averaged data for all variables in a file
+   !---------------------------------------------------------------------------
+   subroutine write_file_averaged(file_ptr, current_time)
+      type(output_file_def), pointer, intent(inout) :: file_ptr
+      real, intent(in) :: current_time
 
-      integer :: stream_idx
-      character(len=IO_PREFIX_LEN) :: prefix
+      integer :: i, var_idx, status
+      type(io_variable), pointer :: var_ptr
+      type(avg_state), pointer :: state_ptr
+      logical :: any_written
 
-      belongs = .false.
+      any_written = .false.
 
-      ! Get stream index for this file type
-      stream_idx = get_stream_index(file_ptr%type)
-      if (stream_idx < 1) return
+      do i = 1, file_ptr%num_variables
+         var_idx = var_registry%find(file_ptr%variables(i))
+         if (var_idx < 0) cycle
 
-      ! Determine expected prefix for this variable and stream
-      prefix = var_ptr%get_prefix(stream_idx)
-      if (trim(prefix) == "") then
-         prefix = trim(get_output_prefix())
+         var_ptr => var_registry%get_ptr(var_idx)
+         if (.not. associated(var_ptr)) cycle
+
+         state_ptr => file_ptr%get_avg_state(var_ptr%meta%name)
+         if (.not. associated(state_ptr)) cycle
+         if (.not. state_ptr%is_ready()) cycle
+
+         status = nc_write_avg_data(file_ptr%backend_id, file_ptr%time_index, &
+                                    var_ptr, state_ptr)
+         if (status == 0) any_written = .true.
+      end do
+
+      if (any_written) then
+         status = nc_write_time(file_ptr%backend_id, file_ptr%time_varid, &
+                                file_ptr%time_index, current_time)
+         call file_ptr%increment_time()
       end if
+   end subroutine write_file_averaged
 
-      ! Check if this file matches the expected prefix
-      belongs = (index(file_ptr%filename, trim(prefix)) == 1)
-   end function belongs_to_file
+   !---------------------------------------------------------------------------
+   !> @brief Reset averaging states for all variables in a file
+   !---------------------------------------------------------------------------
+   subroutine reset_file_averaging(file_ptr)
+      type(output_file_def), pointer, intent(inout) :: file_ptr
+
+      integer :: i
+      type(avg_state), pointer :: state_ptr
+
+      do i = 1, file_ptr%num_variables
+         state_ptr => file_ptr%get_avg_state(file_ptr%variables(i))
+         if (associated(state_ptr)) then
+            call state_ptr%reset()
+         end if
+      end do
+   end subroutine reset_file_averaging
 
 end module io_manager

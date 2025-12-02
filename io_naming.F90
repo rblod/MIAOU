@@ -49,19 +49,19 @@ contains
    !> Generate a filename for an output file
    !>
    !> Constructs a filename following the convention:
-   !>   {prefix}_{type}_{frequency}s.{extension}
+   !>   {prefix}_{name}_{frequency}s.{extension}
    !>
    !> If frequency <= 0, the frequency part is omitted:
-   !>   {prefix}_{type}.{extension}
+   !>   {prefix}_{name}.{extension}
    !>
    !> @param[in] prefix     File prefix (e.g., "ocean", "model")
-   !> @param[in] file_type  Type of file ("his", "avg", "rst")
+   !> @param[in] file_name  Logical name of file (e.g., "hourly", "daily_avg")
    !> @param[in] freq       Output frequency in seconds (<=0 to omit)
    !> @param[in] extension  Optional: file extension (default: module default)
    !> @return    Complete filename
-   function generate_filename(prefix, file_type, freq, extension) result(filename)
+   function generate_filename(prefix, file_name, freq, extension) result(filename)
       character(len=*), intent(in) :: prefix
-      character(len=*), intent(in) :: file_type
+      character(len=*), intent(in) :: file_name
       real, intent(in) :: freq
       character(len=*), intent(in), optional :: extension
       character(len=IO_PATH_LEN) :: filename
@@ -79,9 +79,9 @@ contains
       ! Build filename
       if (freq > 0) then
          write(freq_str, '(I0)') nint(freq)
-         filename = trim(prefix)//'_'//trim(file_type)//'_'//trim(freq_str)//'s.'//trim(ext)
+         filename = trim(prefix)//'_'//trim(file_name)//'_'//trim(freq_str)//'s.'//trim(ext)
       else
-         filename = trim(prefix)//'_'//trim(file_type)//'.'//trim(ext)
+         filename = trim(prefix)//'_'//trim(file_name)//'.'//trim(ext)
       end if
    end function generate_filename
 
