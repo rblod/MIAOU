@@ -39,7 +39,7 @@ module io_constants
    !> Maximum length for file paths
    integer, parameter :: IO_PATH_LEN = 256
    
-   !> Maximum length for file type identifiers ("his", "avg", "rst")
+   !> Maximum length for file type identifiers
    integer, parameter :: IO_FILETYPE_LEN = 16
 
    !---------------------------------------------------------------------------
@@ -60,25 +60,6 @@ module io_constants
    
    !> Growth factor for dynamic array expansion (percentage)
    integer, parameter :: IO_GROWTH_FACTOR = 50
-
-   !---------------------------------------------------------------------------
-   ! File type identifiers
-   !---------------------------------------------------------------------------
-   
-   !> History file type identifier
-   character(len=*), parameter :: IO_TYPE_HIS = "his"
-   
-   !> Average file type identifier
-   character(len=*), parameter :: IO_TYPE_AVG = "avg"
-   
-   !> Restart file type identifier
-   character(len=*), parameter :: IO_TYPE_RST = "rst"
-   
-   !> Array of all file types (for iteration)
-   character(len=3), parameter :: IO_FILE_TYPES(3) = ["his", "avg", "rst"]
-   
-   !> Number of file types
-   integer, parameter :: IO_NUM_FILE_TYPES = 3
 
    !---------------------------------------------------------------------------
    ! Default values
