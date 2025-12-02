@@ -1,5 +1,80 @@
 # MIAOU - Changelog
 
+## Version 0.5.0 - 2025-04
+
+### Summary
+
+Introduction of the `output_stream` type to unify and simplify output configuration.
+
+---
+
+### 7. Introduced output_stream type
+
+**Problem:**  
+`io_variable` had repetitive fields for each output type:
+```fortran
+logical :: to_his, to_avg, to_rst
+real :: freq_his, freq_avg, freq_rst
+character(len=128) :: file_prefix  ! Shared across all types
+```
+
+This led to repetitive `select case` blocks throughout the codebase and made
+it difficult to add new output types or per-stream prefixes.
+
+**Solution:**  
+New `output_stream` type encapsulating stream configuration:
+
+```fortran
+type :: output_stream
+   character(len=16) :: stream_type   ! "his", "avg", "rst"
+   logical :: enabled                 ! Write to this stream?
+   real :: frequency                  ! Output frequency (seconds)
+   character(len=128) :: prefix       ! File prefix (empty = global)
+contains
+   procedure :: should_write          ! Check if write at given time
+   procedure :: is_averaging          ! True if stream_type == "avg"
+   procedure :: is_active             ! True if enabled with valid frequency
+end type
+```
+
+`io_variable` now uses an array of streams:
+```fortran
+type :: io_variable
+   ! ... metadata and data pointers ...
+   type(output_stream) :: streams(3)  ! Indexed by STREAM_HIS, STREAM_AVG, STREAM_RST
+   ! ... averaging buffers ...
+contains
+   procedure :: has_output            ! Any stream active?
+   procedure :: needs_averaging       ! Is STREAM_AVG active?
+   procedure :: get_prefix            ! Get prefix for a stream
+end type
+```
+
+**Benefits:**
+
+| Aspect | Before | After |
+|--------|--------|-------|
+| Fields per variable | 7 (to_his, freq_his, to_avg, freq_avg, to_rst, freq_rst, file_prefix) | 1 array of 3 streams |
+| Iteration over types | `select case` with string matching | Simple `do` loop over streams array |
+| Per-stream prefix | Not possible | Each stream has its own prefix |
+| Adding new type | Modify io_variable + all select cases | Add constant + enlarge array |
+| Time check logic | Duplicated in multiple modules | Encapsulated in `stream%should_write()` |
+
+**New constants:**
+```fortran
+integer, parameter :: STREAM_HIS = 1
+integer, parameter :: STREAM_AVG = 2
+integer, parameter :: STREAM_RST = 3
+```
+
+**Files modified:**
+- `io_definitions.F90` — New `output_stream` type, updated `io_variable`
+- `io_config.F90` — Updated to populate `streams` array
+- `io_manager.F90` — Refactored to iterate over streams
+- `io_averaging.F90` — Uses `needs_averaging()` method
+
+---
+
 ## Version 0.4.0 - 2025-04
 
 ### Summary

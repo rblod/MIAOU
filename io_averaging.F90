@@ -118,7 +118,7 @@ contains
       if (.not. associated(var_ptr)) return
 
       ! Skip if averaging not required for this variable
-      if (.not. var_ptr%to_avg) return
+      if (.not. var_ptr%needs_averaging()) return
 
       ! Initialize buffers if needed
       call avg_init_buffers(var_ptr)

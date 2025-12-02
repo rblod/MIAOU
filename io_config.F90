@@ -12,8 +12,9 @@
 !===============================================================================
 module io_config
    use io_constants, only: IO_VARNAME_LEN, IO_PREFIX_LEN, IO_FREQ_DISABLED, &
-                           IO_DEFAULT_PREFIX
-   use io_definitions, only: io_variable
+                           IO_DEFAULT_PREFIX, IO_TYPE_HIS, IO_TYPE_AVG, IO_TYPE_RST
+   use io_definitions, only: io_variable, output_stream, &
+                             STREAM_HIS, STREAM_AVG, STREAM_RST
    implicit none
    private
 
@@ -202,7 +203,11 @@ contains
       logical :: found
 
       found = .false.
-      !  if(.not. allocated(var_configs)) stop
+
+      ! Initialize streams with their types
+      var%streams(STREAM_HIS)%stream_type = IO_TYPE_HIS
+      var%streams(STREAM_AVG)%stream_type = IO_TYPE_AVG
+      var%streams(STREAM_RST)%stream_type = IO_TYPE_RST
 
       ! Look for this variable in the configurations
       if (allocated(var_configs)) then
@@ -213,8 +218,9 @@ contains
                found = .true.
 
                print *, "Applied specific config for: ", trim(var%name), &
-                  " file_prefix=", trim(var%file_prefix), &
-                  " to_his=", var%to_his, " to_avg=", var%to_avg, " to_rst=", var%to_rst
+                  " his=", var%streams(STREAM_HIS)%enabled, &
+                  " avg=", var%streams(STREAM_AVG)%enabled, &
+                  " rst=", var%streams(STREAM_RST)%enabled
                exit
             end if
          end do
@@ -222,13 +228,20 @@ contains
 
       ! If not found, apply global defaults
       if (.not. found) then
-         var%to_his = global_to_his
-         var%to_avg = global_to_avg
-         var%to_rst = global_to_rst
-         var%freq_his = global_freq_his
-         var%freq_avg = global_freq_avg
-         var%freq_rst = global_freq_rst
-         var%file_prefix = ""  ! Use global prefix
+         ! History stream
+         var%streams(STREAM_HIS)%enabled = global_to_his
+         var%streams(STREAM_HIS)%frequency = global_freq_his
+         var%streams(STREAM_HIS)%prefix = ""
+
+         ! Average stream
+         var%streams(STREAM_AVG)%enabled = global_to_avg
+         var%streams(STREAM_AVG)%frequency = global_freq_avg
+         var%streams(STREAM_AVG)%prefix = ""
+
+         ! Restart stream
+         var%streams(STREAM_RST)%enabled = global_to_rst
+         var%streams(STREAM_RST)%frequency = global_freq_rst
+         var%streams(STREAM_RST)%prefix = ""
       end if
    end subroutine apply_config_to_variable
 
@@ -240,52 +253,55 @@ contains
       type(io_variable), intent(inout) :: var
       type(var_config), intent(in) :: var_conf
 
-      ! Copy output flags
-      var%to_his = var_conf%wrt
-      var%to_avg = var_conf%avg
-      var%to_rst = var_conf%rst
+      logical :: use_global_flags
 
-      ! Apply global defaults for flags if not specified
-      if (.not. var_conf%wrt .and. .not. var_conf%avg .and. .not. var_conf%rst) then
-         ! If all flags are false, use global defaults
-         var%to_his = global_to_his
-         var%to_avg = global_to_avg
-         var%to_rst = global_to_rst
+      ! Check if any flag is explicitly set
+      use_global_flags = (.not. var_conf%wrt .and. .not. var_conf%avg .and. .not. var_conf%rst)
+
+      ! History stream
+      if (use_global_flags) then
+         var%streams(STREAM_HIS)%enabled = global_to_his
+      else
+         var%streams(STREAM_HIS)%enabled = var_conf%wrt
       end if
-
-      ! Copy output frequencies, using global defaults if unspecified
-      ! For history files
       if (var_conf%freq_his > 0.0) then
-         var%freq_his = var_conf%freq_his
-      else if (var%to_his) then
-         ! Use global default if flag is enabled
-         var%freq_his = global_freq_his
+         var%streams(STREAM_HIS)%frequency = var_conf%freq_his
+      else if (var%streams(STREAM_HIS)%enabled) then
+         var%streams(STREAM_HIS)%frequency = global_freq_his
       else
-         var%freq_his = -1.0
+         var%streams(STREAM_HIS)%frequency = IO_FREQ_DISABLED
       end if
+      var%streams(STREAM_HIS)%prefix = var_conf%file_prefix
 
-      ! For average files
+      ! Average stream
+      if (use_global_flags) then
+         var%streams(STREAM_AVG)%enabled = global_to_avg
+      else
+         var%streams(STREAM_AVG)%enabled = var_conf%avg
+      end if
       if (var_conf%freq_avg > 0.0) then
-         var%freq_avg = var_conf%freq_avg
-      else if (var%to_avg) then
-         ! Use global default if flag is enabled
-         var%freq_avg = global_freq_avg
+         var%streams(STREAM_AVG)%frequency = var_conf%freq_avg
+      else if (var%streams(STREAM_AVG)%enabled) then
+         var%streams(STREAM_AVG)%frequency = global_freq_avg
       else
-         var%freq_avg = -1.0
+         var%streams(STREAM_AVG)%frequency = IO_FREQ_DISABLED
       end if
+      var%streams(STREAM_AVG)%prefix = var_conf%file_prefix
 
-      ! For restart files
+      ! Restart stream
+      if (use_global_flags) then
+         var%streams(STREAM_RST)%enabled = global_to_rst
+      else
+         var%streams(STREAM_RST)%enabled = var_conf%rst
+      end if
       if (var_conf%freq_rst > 0.0) then
-         var%freq_rst = var_conf%freq_rst
-      else if (var%to_rst) then
-         ! Use global default if flag is enabled
-         var%freq_rst = global_freq_rst
+         var%streams(STREAM_RST)%frequency = var_conf%freq_rst
+      else if (var%streams(STREAM_RST)%enabled) then
+         var%streams(STREAM_RST)%frequency = global_freq_rst
       else
-         var%freq_rst = -1.0
+         var%streams(STREAM_RST)%frequency = IO_FREQ_DISABLED
       end if
-
-      ! Copy file prefix
-      var%file_prefix = var_conf%file_prefix
+      var%streams(STREAM_RST)%prefix = var_conf%file_prefix
    end subroutine apply_specific_config
 
    !> Get the global output prefix

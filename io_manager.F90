@@ -17,8 +17,9 @@
 !===============================================================================
 module io_manager
    use io_constants, only: IO_TIME_TOLERANCE, IO_PATH_LEN, IO_PREFIX_LEN, &
-                           IO_FILE_TYPES, IO_NUM_FILE_TYPES, IO_INITIAL_ALLOC
-   use io_definitions, only: io_variable, file_descriptor, io_var_registry
+                           IO_NUM_FILE_TYPES, IO_INITIAL_ALLOC
+   use io_definitions, only: io_variable, file_descriptor, io_var_registry, &
+                             output_stream, STREAM_HIS, STREAM_AVG, STREAM_RST
    use io_config, only: read_io_config, apply_config_to_variable, get_output_prefix
    use io_naming, only: generate_filename
    use io_netcdf, only: nc_initialize, nc_finalize, nc_create_file, &
@@ -272,13 +273,12 @@ contains
       character(len=*), intent(in), optional :: time_units, calendar
       integer :: files_created
 
-      integer :: i, j, var_idx, status
-      real :: freq
-      character(len=256) :: filename
-      character(len=128) :: expected_prefix
+      integer :: var_idx, stream_idx, status
+      character(len=IO_PATH_LEN) :: filename, prefix
       type(io_variable), pointer :: var_ptr
+      type(output_stream) :: stream
       type(file_descriptor) :: file_desc
-      character(len=256) :: local_time_units, local_calendar
+      character(len=IO_PATH_LEN) :: local_time_units, local_calendar
 
       files_created = 0
 
@@ -300,36 +300,28 @@ contains
          var_ptr => var_registry%get_ptr(var_idx)
          if (.not. associated(var_ptr)) cycle
 
-         ! For each output file type
-         do j = 1, IO_NUM_FILE_TYPES
-            ! Check if this variable should be written to this type of file
-            select case (trim(IO_FILE_TYPES(j)))
-            case ("his")
-               if (.not. var_ptr%to_his) cycle
-               freq = var_ptr%freq_his
-            case ("avg")
-               if (.not. var_ptr%to_avg) cycle
-               freq = var_ptr%freq_avg
-            case ("rst")
-               if (.not. var_ptr%to_rst) cycle
-               freq = var_ptr%freq_rst
-            end select
+         ! For each output stream
+         do stream_idx = 1, IO_NUM_FILE_TYPES
+            stream = var_ptr%streams(stream_idx)
 
-            ! Skip if frequency not defined
-            if (freq <= 0) cycle
+            ! Skip inactive streams
+            if (.not. stream%is_active()) cycle
 
-            ! Generate filename - use global prefix if variable prefix is empty
-            if (trim(var_ptr%file_prefix) == "") then
-               filename = generate_filename(get_output_prefix(), IO_FILE_TYPES(j), freq)
+            ! Determine prefix
+            if (trim(stream%prefix) == "") then
+               prefix = get_output_prefix()
             else
-               filename = generate_filename(var_ptr%file_prefix, IO_FILE_TYPES(j), freq)
+               prefix = stream%prefix
             end if
+
+            ! Generate filename
+            filename = generate_filename(prefix, stream%stream_type, stream%frequency)
 
             ! Check if file already exists in our list
             if (file_exists(filename)) cycle
 
             ! Create the file
-            status = nc_create_file(filename, IO_FILE_TYPES(j), freq, &
+            status = nc_create_file(filename, stream%stream_type, stream%frequency, &
                                    local_time_units, local_calendar, file_desc)
 
             if (status /= 0) then
@@ -338,7 +330,7 @@ contains
             end if
 
             ! Define all applicable variables in this file
-            call define_variables_in_file(file_desc, IO_FILE_TYPES(j))
+            call define_variables_in_file(file_desc, stream%stream_type)
 
             ! End definition mode
             status = nc_end_definition(file_desc)
@@ -363,33 +355,34 @@ contains
       type(file_descriptor), intent(in) :: file_desc
       character(len=*), intent(in) :: file_type
 
-      integer :: i, status
+      integer :: i, stream_idx, status
       type(io_variable), pointer :: var_ptr
-      character(len=128) :: expected_prefix
+      type(output_stream) :: stream
+      character(len=IO_PREFIX_LEN) :: expected_prefix
+
+      ! Determine stream index from file type
+      stream_idx = get_stream_index(file_type)
+      if (stream_idx < 1) return
 
       do i = 1, var_registry%size()
          var_ptr => var_registry%get_ptr(i)
          if (.not. associated(var_ptr)) cycle
 
+         ! Get stream for this file type
+         stream = var_ptr%streams(stream_idx)
+
+         ! Skip if stream not active
+         if (.not. stream%is_active()) cycle
+
          ! Determine expected prefix for this variable
-         if (trim(var_ptr%file_prefix) /= "") then
-            expected_prefix = trim(var_ptr%file_prefix)
+         if (trim(stream%prefix) /= "") then
+            expected_prefix = trim(stream%prefix)
          else
             expected_prefix = trim(get_output_prefix())
          end if
 
          ! Check if this variable belongs in this file (prefix match)
          if (index(file_desc%filename, trim(expected_prefix)) /= 1) cycle
-
-         ! Check if this variable should be written to this file type
-         select case (trim(file_type))
-         case ("his")
-            if (.not. var_ptr%to_his) cycle
-         case ("avg")
-            if (.not. var_ptr%to_avg) cycle
-         case ("rst")
-            if (.not. var_ptr%to_rst) cycle
-         end select
 
          ! Define the variable in the file
          status = nc_define_variable_in_file(file_desc, var_ptr)
@@ -399,6 +392,26 @@ contains
          end if
       end do
    end subroutine define_variables_in_file
+
+   !> Get stream index from file type string
+   !>
+   !> @param[in] file_type  File type ("his", "avg", "rst")
+   !> @return    Stream index or -1 if invalid
+   function get_stream_index(file_type) result(idx)
+      character(len=*), intent(in) :: file_type
+      integer :: idx
+
+      select case (trim(file_type))
+      case ("his")
+         idx = STREAM_HIS
+      case ("avg")
+         idx = STREAM_AVG
+      case ("rst")
+         idx = STREAM_RST
+      case default
+         idx = -1
+      end select
+   end function get_stream_index
 
    !---------------------------------------------------------------------------
    ! Data writing
@@ -499,7 +512,7 @@ contains
          if (.not. associated(var_ptr)) cycle
 
          ! Only accumulate for variables that need averages
-         if (var_ptr%to_avg) then
+         if (var_ptr%needs_averaging()) then
             call accumulate_avg(var_ptr)
          end if
       end do
@@ -543,13 +556,23 @@ contains
       logical, intent(in) :: is_final_step, is_write_time
       logical, intent(inout) :: any_written
 
-      integer :: varid
+      integer :: varid, stream_idx
+      type(output_stream) :: stream
 
       ! Check if this variable belongs to this file
       if (.not. belongs_to_file(var_ptr, file_ptr)) return
 
+      ! Get stream index for this file type
+      stream_idx = get_stream_index(file_ptr%type)
+      if (stream_idx < 1) return
+
+      stream = var_ptr%streams(stream_idx)
+
+      ! Skip if stream not active
+      if (.not. stream%is_active()) return
+
       ! Case 1: Final step restart files
-      if (is_final_step .and. trim(file_ptr%type) == "rst" .and. var_ptr%to_rst) then
+      if (is_final_step .and. stream_idx == STREAM_RST) then
          if (nc_write_variable_data(file_ptr, var_ptr) == 0) any_written = .true.
          return
       end if
@@ -557,26 +580,20 @@ contains
       ! Case 2: Regular write time
       if (.not. is_write_time) return
 
-      select case (trim(file_ptr%type))
-      case ("his")
-         if (var_ptr%to_his) then
-            if (nc_write_variable_data(file_ptr, var_ptr) == 0) any_written = .true.
+      select case (stream_idx)
+      case (STREAM_HIS)
+         if (nc_write_variable_data(file_ptr, var_ptr) == 0) any_written = .true.
+
+      case (STREAM_AVG)
+         varid = get_varid_for_variable(var_ptr, file_ptr%backend_id)
+         if (write_variable_avg(var_ptr, file_ptr%backend_id, varid, &
+                                file_ptr%time_index) == 0) then
+            any_written = .true.
+            call reset_avg(var_ptr)
          end if
 
-      case ("avg")
-         if (var_ptr%to_avg) then
-            varid = get_varid_for_variable(var_ptr, file_ptr%backend_id)
-            if (write_variable_avg(var_ptr, file_ptr%backend_id, varid, &
-                                   file_ptr%time_index) == 0) then
-               any_written = .true.
-               call reset_avg(var_ptr)
-            end if
-         end if
-
-      case ("rst")
-         if (var_ptr%to_rst) then
-            if (nc_write_variable_data(file_ptr, var_ptr) == 0) any_written = .true.
-         end if
+      case (STREAM_RST)
+         if (nc_write_variable_data(file_ptr, var_ptr) == 0) any_written = .true.
       end select
    end subroutine write_var_to_file
 
@@ -612,37 +629,29 @@ contains
       real, intent(in) :: current_time
       logical :: should_write
 
-      real :: freq
+      integer :: stream_idx
+      type(output_stream) :: stream
 
       should_write = .false.
 
       ! First check if the variable belongs to this file
       if (.not. belongs_to_file(var_ptr, file_ptr)) return
 
-      ! Check if variable should be written to this file type
-      select case (trim(file_ptr%type))
-      case ("his")
-         if (.not. var_ptr%to_his) return
-         freq = var_ptr%freq_his
-      case ("avg")
-         if (.not. var_ptr%to_avg) return
-         freq = var_ptr%freq_avg
-      case ("rst")
-         if (.not. var_ptr%to_rst) return
-         freq = var_ptr%freq_rst
-      case default
-         return
-      end select
+      ! Get stream index for this file type
+      stream_idx = get_stream_index(file_ptr%type)
+      if (stream_idx < 1) return
 
-      ! Check frequency
-      if (freq <= 0.0) return
+      stream = var_ptr%streams(stream_idx)
+
+      ! Check if stream is active
+      if (.not. stream%is_active()) return
 
       ! Determine if we should write at this time step
       if (abs(current_time) < IO_TIME_TOLERANCE) then
          ! First time step - only write history
-         should_write = (trim(file_ptr%type) == "his")
+         should_write = (stream_idx == STREAM_HIS)
       else
-         should_write = is_output_time(current_time, freq)
+         should_write = stream%should_write(current_time)
       end if
    end function should_write_to_file
 
@@ -655,12 +664,19 @@ contains
       type(io_variable), pointer, intent(in) :: var_ptr
       type(file_descriptor), pointer, intent(in) :: file_ptr
       logical :: belongs
-      character(len=128) :: prefix
 
-      ! Determine expected prefix for this variable
-      if (trim(var_ptr%file_prefix) /= "") then
-         prefix = trim(var_ptr%file_prefix)
-      else
+      integer :: stream_idx
+      character(len=IO_PREFIX_LEN) :: prefix
+
+      belongs = .false.
+
+      ! Get stream index for this file type
+      stream_idx = get_stream_index(file_ptr%type)
+      if (stream_idx < 1) return
+
+      ! Determine expected prefix for this variable and stream
+      prefix = var_ptr%get_prefix(stream_idx)
+      if (trim(prefix) == "") then
          prefix = trim(get_output_prefix())
       end if
 
