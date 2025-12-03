@@ -86,6 +86,15 @@ module io_file_registry
    !>
    !> Describes what goes into an output file: which variables, at what
    !> frequency, with what operation (instant, average, etc.)
+   !>
+   !> ## Restart mode
+   !>
+   !> When `is_restart = .true.`:
+   !> - File is written in overwrite mode (not append)
+   !> - `restart_nlevels` consecutive time steps are written
+   !> - `frequency < 0` means write only at final time
+   !> - `double_precision = .true.` writes in real*8
+   !> - Initial state (t=0) is never written
    !---------------------------------------------------------------------------
    type :: output_file_def
       ! Identification
@@ -93,8 +102,13 @@ module io_file_registry
       character(len=IO_PREFIX_LEN) :: prefix = ""     !< Filename prefix (empty = global)
       
       ! Output configuration
-      real :: frequency = IO_FREQ_DISABLED            !< Output frequency (seconds)
+      real :: frequency = IO_FREQ_DISABLED            !< Output frequency (seconds), <0 = final only
       integer :: operation = OP_INSTANT               !< Operation type
+      
+      ! Restart-specific options
+      logical :: is_restart = .false.                 !< Restart file mode
+      integer :: restart_nlevels = 1                  !< Number of time levels to write
+      logical :: double_precision = .false.           !< Write in double precision
       
       ! Variables in this file
       character(len=IO_VARNAME_LEN) :: variables(MAX_VARS_PER_FILE) = ""
@@ -109,6 +123,11 @@ module io_file_registry
       
       ! Averaging state (one per variable)
       type(avg_state), allocatable :: avg_states(:)
+      
+      ! Restart buffer: stores time values for the last N levels
+      real, allocatable :: restart_times(:)           !< Circular buffer for time values
+      integer :: restart_buffer_idx = 0               !< Current index in circular buffer
+      integer :: restart_buffer_count = 0             !< Number of values stored
    contains
       procedure :: add_variable => file_add_variable
       procedure :: has_variable => file_has_variable
@@ -117,6 +136,9 @@ module io_file_registry
       procedure :: init_avg_states => file_init_avg_states
       procedure :: is_open => file_is_open
       procedure :: increment_time => file_increment_time
+      procedure :: is_restart_file => file_is_restart
+      procedure :: init_restart_buffer => file_init_restart_buffer
+      procedure :: store_restart_time => file_store_restart_time
    end type output_file_def
 
    !---------------------------------------------------------------------------
@@ -615,5 +637,55 @@ contains
          end if
       end do
    end subroutine registry_files_for_var
+
+   !===========================================================================
+   ! Restart-specific methods
+   !===========================================================================
+
+   !---------------------------------------------------------------------------
+   !> @brief Check if this is a restart file
+   !---------------------------------------------------------------------------
+   function file_is_restart(this) result(is_rst)
+      class(output_file_def), intent(in) :: this
+      logical :: is_rst
+      is_rst = this%is_restart
+   end function file_is_restart
+
+   !---------------------------------------------------------------------------
+   !> @brief Initialize restart buffer for time values
+   !---------------------------------------------------------------------------
+   subroutine file_init_restart_buffer(this)
+      class(output_file_def), intent(inout) :: this
+
+      if (.not. this%is_restart) return
+      
+      if (allocated(this%restart_times)) deallocate(this%restart_times)
+      allocate(this%restart_times(this%restart_nlevels))
+      this%restart_times = 0.0
+      this%restart_buffer_idx = 0
+      this%restart_buffer_count = 0
+   end subroutine file_init_restart_buffer
+
+   !---------------------------------------------------------------------------
+   !> @brief Store a time value in the restart circular buffer
+   !>
+   !> @param[in] time_value  Time to store
+   !---------------------------------------------------------------------------
+   subroutine file_store_restart_time(this, time_value)
+      class(output_file_def), intent(inout) :: this
+      real, intent(in) :: time_value
+
+      if (.not. this%is_restart) return
+      if (.not. allocated(this%restart_times)) call this%init_restart_buffer()
+
+      ! Circular buffer: advance index
+      this%restart_buffer_idx = mod(this%restart_buffer_idx, this%restart_nlevels) + 1
+      this%restart_times(this%restart_buffer_idx) = time_value
+      
+      ! Track how many values we have (up to nlevels)
+      if (this%restart_buffer_count < this%restart_nlevels) then
+         this%restart_buffer_count = this%restart_buffer_count + 1
+      end if
+   end subroutine file_store_restart_time
 
 end module io_file_registry

@@ -3,7 +3,7 @@
 Enhanced verification script for MIAOU (File-Centric Architecture)
 
 This script:
-1. Parses the new io_files_nml namelist format
+1. Parses the new io_files_nml namelist format with group support
 2. Reproduces the calculations from main_test_output
 3. Compares calculated values with NetCDF file contents
 4. Supports instant, average, min, max operations
@@ -13,7 +13,46 @@ This script:
 import os
 import re
 import numpy as np
-import xarray as xr
+
+# Try different NetCDF backends
+try:
+    import netCDF4 as nc
+    NC_BACKEND = "netCDF4"
+except ImportError:
+    try:
+        from scipy.io import netcdf as nc
+        NC_BACKEND = "scipy"
+    except ImportError:
+        print("ERROR: No NetCDF library found. Install netCDF4 or scipy:")
+        print("  pip install netCDF4")
+        print("  or")
+        print("  pip install scipy")
+        exit(1)
+
+
+def open_netcdf(filename):
+    """Open a NetCDF file with available backend"""
+    if NC_BACKEND == "netCDF4":
+        return nc.Dataset(filename, "r")
+    else:
+        return nc.netcdf_file(filename, "r", mmap=False)
+
+
+def get_nc_variable(ds, varname):
+    """Get variable data from NetCDF dataset"""
+    if NC_BACKEND == "netCDF4":
+        return ds.variables[varname][:]
+    else:
+        return ds.variables[varname].data.copy()
+
+
+def get_nc_varnames(ds):
+    """Get variable names from NetCDF dataset"""
+    if NC_BACKEND == "netCDF4":
+        return [v for v in ds.variables if v not in ds.dimensions and v != "time"]
+    else:
+        return [v for v in ds.variables.keys() if v not in ds.dimensions.keys() and v != "time"]
+
 
 # ANSI color codes for terminal output
 class Colors:
@@ -42,8 +81,34 @@ DT = 3600.0      # 1 hour timestep
 error_summary = []
 
 
+def expand_groups(var_string, groups):
+    """Expand @groupname references in a variable string.
+    
+    Example: "@surface,temp" -> ["zeta", "u", "v", "temp"] if group "surface" = ["zeta", "u", "v"]
+    """
+    result = []
+    
+    for token in var_string.split(","):
+        token = token.strip()
+        if not token:
+            continue
+            
+        if token.startswith("@"):
+            # Group reference
+            group_name = token[1:]
+            if group_name in groups:
+                result.extend(groups[group_name])
+            else:
+                print(f"  Warning: Unknown group @{group_name}")
+        else:
+            # Regular variable
+            result.append(token)
+    
+    return result
+
+
 def parse_namelist(filename="output_config.nml"):
-    """Parse the new file-centric namelist format (io_files_nml)"""
+    """Parse the new file-centric namelist format (io_files_nml) with group support"""
     
     config = {
         "global": {
@@ -51,6 +116,7 @@ def parse_namelist(filename="output_config.nml"):
             "time_units": "seconds since 2023-01-01 00:00:00",
             "calendar": "gregorian",
         },
+        "groups": {},  # name -> list of variables
         "files": [],
     }
     
@@ -76,27 +142,49 @@ def parse_namelist(filename="output_config.nml"):
     if cal_match:
         config["global"]["calendar"] = cal_match.group(1)
     
+    # Extract variable groups (up to 10)
+    for i in range(1, 11):
+        name_match = re.search(rf'group_name\({i}\)\s*=\s*"([^"]*)"', content)
+        vars_match = re.search(rf'group_vars\({i}\)\s*=\s*"([^"]*)"', content)
+        
+        if name_match and vars_match:
+            group_name = name_match.group(1)
+            group_vars = [v.strip() for v in vars_match.group(1).split(",")]
+            config["groups"][group_name] = group_vars
+    
     # Extract file definitions (up to 20 files)
     for i in range(1, 21):
         name_match = re.search(rf'file_name\({i}\)\s*=\s*"([^"]*)"', content)
-        freq_match = re.search(rf'file_freq\({i}\)\s*=\s*([\d\.]+)', content)
+        freq_match = re.search(rf'file_freq\({i}\)\s*=\s*(-?[\d\.]+)', content)  # Allow negative
         op_match = re.search(rf'file_operation\({i}\)\s*=\s*"([^"]*)"', content)
         vars_match = re.search(rf'file_vars\({i}\)\s*=\s*"([^"]*)"', content)
         prefix_match = re.search(rf'file_prefix\({i}\)\s*=\s*"([^"]*)"', content)
+        restart_match = re.search(rf'file_restart\({i}\)\s*=\s*\.true\.', content, re.IGNORECASE)
+        nlevels_match = re.search(rf'file_restart_nlevels\({i}\)\s*=\s*(\d+)', content)
         
         if name_match and freq_match:
+            # Parse and expand variable list
+            raw_vars = vars_match.group(1) if vars_match else ""
+            expanded_vars = expand_groups(raw_vars, config["groups"])
+            
             file_def = {
                 "name": name_match.group(1),
                 "freq": float(freq_match.group(1)),
                 "operation": op_match.group(1).lower() if op_match else "instant",
-                "variables": [v.strip() for v in vars_match.group(1).split(",")] if vars_match else [],
+                "variables": expanded_vars,
                 "prefix": prefix_match.group(1) if prefix_match else config["global"]["output_prefix"],
+                "is_restart": restart_match is not None,
+                "restart_nlevels": int(nlevels_match.group(1)) if nlevels_match else 1,
             }
             config["files"].append(file_def)
     
     # Debug info
     color_print(f"\nParsed configuration:", Colors.BLUE)
     color_print(f"  Global prefix: '{config['global']['output_prefix']}'", Colors.BLUE)
+    if config["groups"]:
+        color_print(f"  Variable groups:", Colors.BLUE)
+        for name, vars in config["groups"].items():
+            print(f"    @{name}: {vars}")
     color_print(f"  Found {len(config['files'])} file definitions:", Colors.BLUE)
     for f in config["files"]:
         print(f"    - {f['name']}: freq={f['freq']}s, op={f['operation']}, vars={f['variables']}")
@@ -155,16 +243,18 @@ def extract_file_info(filename, config):
         "freq": 0.0,
         "operation": "instant",
         "variables": [],
+        "is_restart": False,
+        "restart_nlevels": 1,
     }
     
-    # Pattern: prefix_name_freqs.nc
+    # Pattern: prefix_name_freqs.nc (non-greedy for prefix)
     match = re.match(r"([^_]+)_(.+)_(\d+)s\.nc", filename)
     if match:
         info["prefix"] = match.group(1)
         info["name"] = match.group(2)
         info["freq"] = float(match.group(3))
     else:
-        # Try pattern without frequency: prefix_name.nc
+        # Try pattern without frequency: prefix_name.nc (for restarts)
         match = re.match(r"(.+)_(.+)\.nc", filename)
         if match:
             info["prefix"] = match.group(1)
@@ -172,18 +262,37 @@ def extract_file_info(filename, config):
     
     # Find matching file definition in config
     for file_def in config["files"]:
-        if file_def["name"] == info["name"] and abs(file_def["freq"] - info["freq"]) < 1.0:
+        # Match by name (freq can be negative for restarts)
+        if file_def["name"] == info["name"]:
+            # For non-restart files, also check frequency
+            if not file_def.get("is_restart", False) and abs(file_def["freq"] - info["freq"]) >= 1.0:
+                continue
             info["operation"] = file_def["operation"]
             info["variables"] = file_def["variables"]
+            info["freq"] = file_def["freq"]
+            info["is_restart"] = file_def.get("is_restart", False)
+            info["restart_nlevels"] = file_def.get("restart_nlevels", 1)
             break
     
     return info
 
 
-def get_expected_times(freq, operation):
+def get_expected_times(freq, operation, is_restart=False, restart_nlevels=1):
     """Calculate expected number of time records"""
     
     total_time = NT * DT  # Total simulation time
+    
+    # Restart files have special handling
+    if is_restart:
+        if freq < 0:
+            # Final only: nlevels time records
+            return restart_nlevels
+        else:
+            # Periodic checkpoints: last checkpoint has nlevels
+            return restart_nlevels
+    
+    if freq <= 0:
+        return 0
     
     if operation in ["instant"]:
         # Output at each frequency interval
@@ -232,25 +341,31 @@ def check_file_content(filename, config, calc_results):
     print(f"  Expected variables: {file_info['variables']}")
     
     file_has_errors = False
+    is_restart = file_info.get("is_restart", False)
+    restart_nlevels = file_info.get("restart_nlevels", 1)
     
-    # Open file with xarray
-    ds = xr.open_dataset(filename, decode_times=False)
+    # Open file with netCDF4
+    ds = nc.Dataset(filename, "r")
     
     # Get time values (in seconds, as written by Fortran)
-    if "time" in ds:
-        time_values = ds["time"].values
+    if "time" in ds.variables:
+        time_values = ds.variables["time"][:]
     else:
-        time_values = []
+        time_values = np.array([])
     
-    # Get variable names
-    var_names = [v for v in ds.data_vars if v != "time"]
+    # Get variable names (excluding dimensions)
+    var_names = [v for v in ds.variables if v not in ds.dimensions and v != "time"]
     
     # Check time dimension
     print(f"\n  Time records: {len(time_values)}")
     if len(time_values) > 0:
         print(f"  Time range: {float(time_values[0]):.0f} - {float(time_values[-1]):.0f} seconds")
     
-    expected_times = get_expected_times(file_info["freq"], file_info["operation"])
+    if is_restart:
+        print(f"  (Restart file: {restart_nlevels} levels expected)")
+    
+    expected_times = get_expected_times(file_info["freq"], file_info["operation"], 
+                                        is_restart, restart_nlevels)
     if len(time_values) != expected_times:
         color_print(f"  WARNING: Expected {expected_times} time records, got {len(time_values)}", Colors.YELLOW)
     

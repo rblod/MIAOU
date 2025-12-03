@@ -71,14 +71,16 @@ contains
       integer :: status
 
       integer :: ncstatus
+      character(len=32) :: date_str, time_str
+      character(len=64) :: datetime_str
 
       status = -1
       ncid = -1
       time_dimid = -1
       time_varid = -1
 
-      ! Create NetCDF file
-      ncstatus = nf90_create(filename, nf90_clobber, ncid)
+      ! Create NetCDF-4 file with compression support
+      ncstatus = nf90_create(filename, ior(nf90_clobber, nf90_netcdf4), ncid)
       if (ncstatus /= nf90_noerr) then
          print *, "ERROR: Cannot create file: ", trim(filename)
          print *, "       NetCDF error: ", trim(nf90_strerror(ncstatus))
@@ -100,15 +102,28 @@ contains
          print *, "WARNING: Cannot create time variable in: ", trim(filename)
          time_varid = -1
       else
-         ! Add attributes
+         ! Add time attributes
          ncstatus = nf90_put_att(ncid, time_varid, "units", trim(time_units))
          ncstatus = nf90_put_att(ncid, time_varid, "standard_name", "time")
          ncstatus = nf90_put_att(ncid, time_varid, "calendar", trim(calendar))
+         ncstatus = nf90_put_att(ncid, time_varid, "axis", "T")
       end if
 
-      ! Add global attributes
+      ! Add global attributes for CF compliance and traceability
+      ncstatus = nf90_put_att(ncid, nf90_global, "Conventions", "CF-1.8")
+      ncstatus = nf90_put_att(ncid, nf90_global, "title", "MIAOU ocean model output")
+      ncstatus = nf90_put_att(ncid, nf90_global, "institution", "LEGOS/CNRS")
+      ncstatus = nf90_put_att(ncid, nf90_global, "source", "MIAOU v0.8.0")
       ncstatus = nf90_put_att(ncid, nf90_global, "file_name", trim(file_name))
-      ncstatus = nf90_put_att(ncid, nf90_global, "output_frequency", freq)
+      ncstatus = nf90_put_att(ncid, nf90_global, "output_frequency_seconds", freq)
+      
+      ! Creation timestamp
+      call date_and_time(date=date_str, time=time_str)
+      write(datetime_str, '(A4,"-",A2,"-",A2,"T",A2,":",A2,":",A2)') &
+            date_str(1:4), date_str(5:6), date_str(7:8), &
+            time_str(1:2), time_str(3:4), time_str(5:6)
+      ncstatus = nf90_put_att(ncid, nf90_global, "history", &
+                              trim(datetime_str)//" Created by MIAOU I/O system")
 
       status = 0
    end function nc_create_file
@@ -175,8 +190,49 @@ contains
          end if
       end if
 
+      ! Add CF-compliant attributes if set
+      call add_cf_attributes(ncid, varid, var)
+
       status = 0
    end function nc_define_variable_in_file
+
+   !---------------------------------------------------------------------------
+   !> @brief Add CF-compliant attributes to a variable
+   !>
+   !> @param[in] ncid   NetCDF file ID
+   !> @param[in] varid  Variable ID
+   !> @param[in] var    Variable with metadata
+   !---------------------------------------------------------------------------
+   subroutine add_cf_attributes(ncid, varid, var)
+      integer, intent(in) :: ncid, varid
+      type(io_variable), intent(in) :: var
+
+      integer :: stat
+
+      ! Standard name (CF convention)
+      if (len_trim(var%meta%standard_name) > 0) then
+         stat = nf90_put_att(ncid, varid, "standard_name", trim(var%meta%standard_name))
+      end if
+
+      ! Valid range (only if explicitly set)
+      if (var%meta%valid_min > -huge(1.0)/2.0) then
+         stat = nf90_put_att(ncid, varid, "valid_min", var%meta%valid_min)
+      end if
+      if (var%meta%valid_max < huge(1.0)/2.0) then
+         stat = nf90_put_att(ncid, varid, "valid_max", var%meta%valid_max)
+      end if
+
+      ! Fill value (only if not default)
+      if (abs(var%meta%fill_value + 9999.0) > 1.0e-5) then
+         stat = nf90_put_att(ncid, varid, "_FillValue", var%meta%fill_value)
+      end if
+
+      ! Coordinates
+      if (len_trim(var%meta%coordinates) > 0) then
+         stat = nf90_put_att(ncid, varid, "coordinates", trim(var%meta%coordinates))
+      end if
+
+   end subroutine add_cf_attributes
 
    !---------------------------------------------------------------------------
    !> @brief End definition mode

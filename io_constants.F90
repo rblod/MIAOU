@@ -71,4 +71,29 @@ module io_constants
    !> Default file prefix
    character(len=*), parameter :: IO_DEFAULT_PREFIX = "output"
 
+   !---------------------------------------------------------------------------
+   ! Compression settings (NetCDF-4) - runtime configurable
+   !---------------------------------------------------------------------------
+   
+   !> Enable/disable compression (set by io_config from namelist)
+   logical, save :: io_compression_enabled = .true.
+   
+   !> Compression level 0-9 (set by io_config from namelist)
+   integer, save :: io_compression_level = 4
+
+   !---------------------------------------------------------------------------
+   ! Flush and verbosity settings - runtime configurable
+   !---------------------------------------------------------------------------
+   
+   !> Flush frequency: sync files every N writes (0 = disabled)
+   integer, save :: io_flush_freq = 0
+   
+   !> Verbosity level: 0=quiet, 1=normal, 2=debug
+   integer, save :: io_verbose = 1
+   
+   !> Verbosity level constants
+   integer, parameter :: IO_QUIET = 0
+   integer, parameter :: IO_NORMAL = 1
+   integer, parameter :: IO_DEBUG = 2
+
 end module io_constants

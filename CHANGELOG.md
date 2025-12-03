@@ -1,5 +1,156 @@
 # MIAOU - Changelog
 
+## Version 0.8.0 - 2025-04
+
+### Summary
+
+Six major improvements: variable groups, validation at initialization, 
+CF-compliant metadata, restart file support, NetCDF-4 with compression,
+and flush/verbosity control.
+
+---
+
+### 1. Variable Groups
+
+**Problem:**  
+Repeating the same list of variables in multiple file definitions is error-prone and verbose.
+
+**Solution:**  
+Define reusable variable groups that can be referenced with `@groupname`:
+
+```fortran
+&io_files_nml
+   group_name(1) = "surface"
+   group_vars(1) = "zeta,u,v"
+   
+   file_vars(1) = "@surface,@atm"     ! Expands to: zeta,u,v,wind_speed
+/
+```
+
+**Files changed:** `io_config.F90`
+
+---
+
+### 2. Configuration Validation
+
+**Problem:**  
+Typos in variable names would silently result in missing outputs.
+
+**Solution:**  
+`validate_config()` checks all referenced variables exist before file creation.
+
+**Files changed:** `io_manager.F90`
+
+---
+
+### 3. CF-Compliant Metadata
+
+**Problem:**  
+Output files lacked standard CF attributes for interoperability.
+
+**Solution:**  
+Extended `var_metadata` with `standard_name`, `valid_min/max`, `coordinates`.
+
+**Files changed:** `io_definitions.F90`, `io_netcdf.F90`, `var_definitions.F90`
+
+---
+
+### 4. Restart File Support
+
+**Problem:**  
+No dedicated support for restart files.
+
+**Solution:**  
+New restart-specific parameters:
+
+```fortran
+file_restart(4) = .true.
+file_restart_nlevels(4) = 2      ! Write T(n-1) and T(n)
+file_double(4) = .true.
+file_freq(4) = -1.0              ! -1 = final only
+```
+
+**Files changed:** `io_file_registry.F90`, `io_config.F90`, `io_manager.F90`
+
+---
+
+### 5. NetCDF-4 with Compression
+
+**Problem:**  
+Large output files, lack of traceability.
+
+**Solution:**  
+- NetCDF-4 format with configurable compression
+- CF-compliant global attributes
+- Creation timestamp in history
+
+```fortran
+nml_compression = .true.
+nml_compression_level = 4        ! 0-9
+```
+
+**Files changed:** `io_netcdf.F90`, `netcdf_backend.F90`, `io_constants.F90`
+
+---
+
+### 6. Flush and Verbosity Control
+
+**Problem:**  
+- Long simulations could lose data on crash
+- Too much or too little diagnostic output
+
+**Solution:**  
+
+**Periodic flush:** Sync files to disk every N writes to prevent data loss:
+
+```fortran
+nml_flush_freq = 10              ! Sync every 10 writes (0=disabled)
+```
+
+**Verbosity levels:**
+
+```fortran
+nml_verbose = 0                  ! Quiet: errors only
+nml_verbose = 1                  ! Normal: configuration + summary (default)
+nml_verbose = 2                  ! Debug: every write operation
+```
+
+| Level | Output |
+|-------|--------|
+| 0 (quiet) | Errors and warnings only |
+| 1 (normal) | Configuration, file creation, validation |
+| 2 (debug) | Every write, flush operations |
+
+**Files changed:** 
+- `io_constants.F90` — New variables `io_flush_freq`, `io_verbose`
+- `io_config.F90` — Namelist parameters, conditional printing
+- `io_manager.F90` — `maybe_flush()` subroutine, verbose messages
+
+---
+
+### 7. Cleanup: Removed Obsolete Constants
+
+Removed from `io_constants.F90`: `IO_TYPE_HIS`, `IO_TYPE_AVG`, `IO_TYPE_RST`
+
+---
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `io_constants.F90` | Compression, flush, verbose variables |
+| `io_config.F90` | Groups, restart, flush, verbose namelist |
+| `io_manager.F90` | Validation, restart, flush, verbose |
+| `io_definitions.F90` | CF-compliant metadata |
+| `io_netcdf.F90` | NetCDF-4, CF attributes |
+| `io_file_registry.F90` | Restart buffer and methods |
+| `netcdf_backend.F90` | Compression |
+| `var_definitions.F90` | Optional CF arguments |
+| `output_config.nml` | Complete example |
+| `verify_output.py` | Group/restart support, netCDF4/scipy backend |
+
+---
+
 ## Version 0.7.0 - 2025-04
 
 ### Summary

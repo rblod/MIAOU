@@ -35,6 +35,12 @@ module io_definitions
    !>
    !> Contains all descriptive information about a variable: name, long name,
    !> units, associated grid, and dimensionality.
+   !> 
+   !> CF-compliant attributes:
+   !> - standard_name: CF standard name (e.g., "sea_surface_height")
+   !> - valid_min/valid_max: Valid data range
+   !> - fill_value: Missing data indicator
+   !> - coordinates: Coordinate variables (e.g., "lat lon")
    !---------------------------------------------------------------------------
    type :: var_metadata
       character(len=IO_VARNAME_LEN) :: name = ""        !< Short name (e.g., "zeta")
@@ -42,6 +48,13 @@ module io_definitions
       character(len=IO_UNITS_LEN) :: units = ""         !< Physical units
       type(grid) :: var_grid                            !< Associated grid
       integer :: ndims = 0                              !< Number of dimensions (0-3)
+      
+      ! CF-compliant attributes
+      character(len=64) :: standard_name = ""           !< CF standard name
+      real :: valid_min = -huge(1.0)                    !< Minimum valid value
+      real :: valid_max = huge(1.0)                     !< Maximum valid value
+      real :: fill_value = -9999.0                      !< Missing data value
+      character(len=64) :: coordinates = ""             !< Coordinate variables (e.g., "lat lon")
    end type var_metadata
 
    !---------------------------------------------------------------------------

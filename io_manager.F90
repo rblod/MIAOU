@@ -18,7 +18,9 @@
 !> @date 2025-04
 !===============================================================================
 module io_manager
-   use io_constants, only: IO_TIME_TOLERANCE, IO_PATH_LEN, IO_PREFIX_LEN
+   use netcdf, only: nf90_sync
+   use io_constants, only: IO_TIME_TOLERANCE, IO_PATH_LEN, IO_PREFIX_LEN, &
+                           io_flush_freq, io_verbose, IO_QUIET, IO_NORMAL, IO_DEBUG
    use io_definitions, only: io_variable, io_var_registry
    use io_config, only: read_io_config, get_output_prefix, get_time_units, &
                         get_calendar, file_registry
@@ -184,6 +186,9 @@ contains
       type(output_file_def), pointer :: file_ptr
       character(len=IO_PATH_LEN) :: filename
 
+      ! First validate configuration
+      call validate_config()
+
       do file_idx = 1, file_registry%size()
          file_ptr => file_registry%get_ptr(file_idx)
          if (.not. associated(file_ptr)) cycle
@@ -209,9 +214,60 @@ contains
          ! End definition mode
          status = nc_end_definition(file_ptr%backend_id)
 
-         print *, "Created file: ", trim(filename)
+         if (io_verbose >= IO_NORMAL) then
+            print *, "Created file: ", trim(filename)
+         end if
       end do
    end subroutine create_all_files
+
+   !---------------------------------------------------------------------------
+   !> @brief Validate configuration: check that all referenced variables exist
+   !>
+   !> Prints warnings for variables referenced in file definitions but not
+   !> registered in the variable registry.
+   !---------------------------------------------------------------------------
+   subroutine validate_config()
+      integer :: file_idx, var_idx, j
+      type(output_file_def), pointer :: file_ptr
+      character(len=32) :: var_name
+      integer :: missing_count, total_refs
+
+      missing_count = 0
+      total_refs = 0
+
+      if (io_verbose >= IO_NORMAL) then
+         print *, ""
+         print *, "Validating I/O configuration..."
+      end if
+
+      do file_idx = 1, file_registry%size()
+         file_ptr => file_registry%get_ptr(file_idx)
+         if (.not. associated(file_ptr)) cycle
+
+         do j = 1, file_ptr%num_variables
+            var_name = file_ptr%variables(j)
+            total_refs = total_refs + 1
+
+            var_idx = var_registry%find(var_name)
+            if (var_idx < 0) then
+               print *, "  WARNING: Variable '", trim(var_name), &
+                        "' in file '", trim(file_ptr%name), "' is not registered"
+               missing_count = missing_count + 1
+            end if
+         end do
+      end do
+
+      if (io_verbose >= IO_NORMAL) then
+         if (missing_count == 0) then
+            print *, "  All ", total_refs, " variable references are valid"
+         else
+            print *, "  Found ", missing_count, " missing variables out of ", total_refs, " references"
+            print *, "  (Missing variables will be skipped during output)"
+         end if
+         print *, ""
+      end if
+
+   end subroutine validate_config
 
    !---------------------------------------------------------------------------
    !> @brief Define variables for a file
@@ -279,6 +335,15 @@ contains
       logical :: is_write_time
 
       if (.not. file_ptr%is_open()) return
+      
+      ! Skip t=0 for restart files
+      if (file_ptr%is_restart .and. abs(current_time) < IO_TIME_TOLERANCE) return
+
+      ! Handle restart files specially
+      if (file_ptr%is_restart) then
+         call process_restart_file(file_ptr, current_time, is_final)
+         return
+      end if
 
       ! Check if it's time to write
       is_write_time = is_output_time(current_time, file_ptr%frequency)
@@ -287,8 +352,7 @@ contains
       if (file_ptr%needs_averaging()) then
          call accumulate_file_data(file_ptr)
 
-         if (is_write_time ) then
-         !if (is_write_time .or. is_final) then
+         if (is_write_time) then
             call write_file_averaged(file_ptr, current_time)
             call reset_file_averaging(file_ptr)
          end if
@@ -300,6 +364,40 @@ contains
       end if
 
    end subroutine process_file
+
+   !---------------------------------------------------------------------------
+   !> @brief Process a restart file
+   !>
+   !> Restart files have special behavior:
+   !> - freq < 0: write only at final time
+   !> - freq > 0: write at freq intervals AND at final time
+   !> - Always stores last N time values
+   !> - Writes N levels at the end (or at checkpoint time)
+   !---------------------------------------------------------------------------
+   subroutine process_restart_file(file_ptr, current_time, is_final)
+      type(output_file_def), pointer, intent(inout) :: file_ptr
+      real, intent(in) :: current_time
+      logical, intent(in) :: is_final
+
+      logical :: is_checkpoint_time
+      
+      ! Store this time in circular buffer (always)
+      call file_ptr%store_restart_time(current_time)
+      
+      ! Determine if we should write
+      if (file_ptr%frequency < 0.0) then
+         ! Final only mode
+         is_checkpoint_time = is_final
+      else
+         ! Periodic checkpoints + final
+         is_checkpoint_time = is_output_time(current_time, file_ptr%frequency) .or. is_final
+      end if
+      
+      if (is_checkpoint_time) then
+         call write_restart_file(file_ptr, current_time)
+      end if
+
+   end subroutine process_restart_file
 
    !---------------------------------------------------------------------------
    !> @brief Check if it's time to write
@@ -392,6 +490,13 @@ contains
          status = nc_write_time(file_ptr%backend_id, file_ptr%time_varid, &
                                 file_ptr%time_index, current_time)
          call file_ptr%increment_time()
+         
+         ! Periodic flush
+         call maybe_flush(file_ptr)
+         
+         if (io_verbose >= IO_DEBUG) then
+            print *, "  Written instant: ", trim(file_ptr%name), " t=", current_time
+         end if
       end if
    end subroutine write_file_instant
 
@@ -429,6 +534,13 @@ contains
          status = nc_write_time(file_ptr%backend_id, file_ptr%time_varid, &
                                 file_ptr%time_index, current_time)
          call file_ptr%increment_time()
+         
+         ! Periodic flush
+         call maybe_flush(file_ptr)
+         
+         if (io_verbose >= IO_DEBUG) then
+            print *, "  Written average: ", trim(file_ptr%name), " t=", current_time
+         end if
       end if
    end subroutine write_file_averaged
 
@@ -448,5 +560,127 @@ contains
          end if
       end do
    end subroutine reset_file_averaging
+
+   !---------------------------------------------------------------------------
+   !> @brief Write restart file with N time levels
+   !>
+   !> This creates/overwrites the restart file with the last N time levels.
+   !> The data is read from the model variables at the current time - we 
+   !> assume the model stores previous time levels internally.
+   !>
+   !> Note: For a proper multi-level restart, the model must provide access
+   !> to previous time level data. This implementation writes the current
+   !> state N times with the stored time values.
+   !---------------------------------------------------------------------------
+   subroutine write_restart_file(file_ptr, current_time)
+      type(output_file_def), pointer, intent(inout) :: file_ptr
+      real, intent(in) :: current_time
+
+      integer :: i, j, var_idx, status, level
+      integer :: start_idx, nlevels_to_write
+      type(io_variable), pointer :: var_ptr
+      real :: time_val
+
+      ! Close existing file if open (we overwrite)
+      if (file_ptr%backend_id > 0) then
+         status = nc_close_file(file_ptr%backend_id)
+         file_ptr%backend_id = -1
+      end if
+
+      ! Recreate the file
+      status = nc_create_file(file_ptr%filename, file_ptr%name, file_ptr%frequency, &
+                              get_time_units(), get_calendar(), &
+                              file_ptr%backend_id, file_ptr%time_dimid, &
+                              file_ptr%time_varid)
+
+      if (status /= 0) then
+         print *, "ERROR: Failed to create restart file: ", trim(file_ptr%filename)
+         return
+      end if
+
+      ! Define variables
+      do i = 1, file_ptr%num_variables
+         var_idx = var_registry%find(file_ptr%variables(i))
+         if (var_idx < 0) cycle
+
+         var_ptr => var_registry%get_ptr(var_idx)
+         if (.not. associated(var_ptr)) cycle
+
+         status = nc_define_variable_in_file(file_ptr%backend_id, file_ptr%time_dimid, var_ptr)
+      end do
+
+      status = nc_end_definition(file_ptr%backend_id)
+
+      ! Determine how many levels to write
+      nlevels_to_write = min(file_ptr%restart_buffer_count, file_ptr%restart_nlevels)
+      
+      if (nlevels_to_write == 0) then
+         print *, "WARNING: No time levels stored for restart"
+         return
+      end if
+
+      ! Write each time level
+      ! Buffer is circular: find starting index for oldest data to write
+      if (file_ptr%restart_buffer_count >= file_ptr%restart_nlevels) then
+         ! Buffer is full, start from oldest
+         start_idx = mod(file_ptr%restart_buffer_idx, file_ptr%restart_nlevels) + 1
+      else
+         ! Buffer not full, start from 1
+         start_idx = 1
+      end if
+
+      file_ptr%time_index = 1
+      
+      do level = 1, nlevels_to_write
+         ! Get time value from circular buffer
+         j = mod(start_idx + level - 2, file_ptr%restart_nlevels) + 1
+         time_val = file_ptr%restart_times(j)
+
+         ! Write all variables at this time index
+         ! Note: This writes current model state - for true multi-level restart,
+         ! the model should provide access to previous time level arrays
+         do i = 1, file_ptr%num_variables
+            var_idx = var_registry%find(file_ptr%variables(i))
+            if (var_idx < 0) cycle
+
+            var_ptr => var_registry%get_ptr(var_idx)
+            if (.not. associated(var_ptr)) cycle
+
+            status = nc_write_variable_data(file_ptr%backend_id, file_ptr%time_index, var_ptr)
+         end do
+
+         ! Write time
+         status = nc_write_time(file_ptr%backend_id, file_ptr%time_varid, &
+                                file_ptr%time_index, time_val)
+         file_ptr%time_index = file_ptr%time_index + 1
+      end do
+
+      if (io_verbose >= IO_NORMAL) then
+         print *, "Written restart: ", trim(file_ptr%filename), " (", nlevels_to_write, " levels)"
+      end if
+
+   end subroutine write_restart_file
+
+   !---------------------------------------------------------------------------
+   !> @brief Flush file to disk if flush frequency is reached
+   !>
+   !> This ensures data is written to disk periodically, protecting against
+   !> data loss in case of crash during long simulations.
+   !---------------------------------------------------------------------------
+   subroutine maybe_flush(file_ptr)
+      type(output_file_def), pointer, intent(in) :: file_ptr
+      
+      integer :: status
+      
+      if (io_flush_freq <= 0) return
+      if (file_ptr%backend_id <= 0) return
+      
+      if (mod(file_ptr%time_index - 1, io_flush_freq) == 0) then
+         status = nf90_sync(file_ptr%backend_id)
+         if (io_verbose >= IO_DEBUG) then
+            print *, "  Flushed: ", trim(file_ptr%name)
+         end if
+      end if
+   end subroutine maybe_flush
 
 end module io_manager

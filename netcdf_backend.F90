@@ -14,6 +14,7 @@ module netcdf_backend
    use netcdf
    use netcdf_utils
    use grid_module
+   use io_constants, only: io_compression_enabled, io_compression_level
    implicit none
    private
 
@@ -105,6 +106,14 @@ contains
       ! Define the variable
       call nc_check(nf90_def_var(ncid, var_name, nf90_real, dim_ids, varid), &
                     "Create variable : "//trim(var_name))
+
+      ! Enable compression for non-scalar variables (NetCDF-4 feature)
+      ! Settings come from namelist via io_constants
+      if (ndims > 0 .and. io_compression_enabled) then
+         ncerr = nf90_def_var_deflate(ncid, varid, shuffle=1, deflate=1, &
+                                      deflate_level=io_compression_level)
+         ! Ignore errors - compression may not be available
+      end if
 
       ! Add attributes
       call nc_check(nf90_put_att(ncid, varid, "long_name", trim(var_long_name)), &
