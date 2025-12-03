@@ -96,4 +96,14 @@ module io_constants
    integer, parameter :: IO_NORMAL = 1
    integer, parameter :: IO_DEBUG = 2
 
+   !---------------------------------------------------------------------------
+   ! Fill value
+   !---------------------------------------------------------------------------
+   
+   !> Default fill value for missing data (matches NF90_FILL_FLOAT)
+   real, parameter :: IO_FILL_VALUE = 9.9692099683868690e+36
+   
+   !> Sentinel value meaning "no fill value set"
+   real, parameter :: IO_FILL_UNSET = -huge(1.0)
+
 end module io_constants

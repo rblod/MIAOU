@@ -12,7 +12,7 @@
 !===============================================================================
 module io_netcdf
    use netcdf
-   use io_constants, only: IO_PATH_LEN
+   use io_constants, only: IO_PATH_LEN, IO_FILL_UNSET
    use netcdf_utils, only: nc_check
    use netcdf_backend, only: nc_define_variable, nc_write_variable
    use grid_module, only: grid, axis, create_axis
@@ -222,8 +222,8 @@ contains
          stat = nf90_put_att(ncid, varid, "valid_max", var%meta%valid_max)
       end if
 
-      ! Fill value (only if not default)
-      if (abs(var%meta%fill_value + 9999.0) > 1.0e-5) then
+      ! Fill value (only if explicitly set by user)
+      if (var%meta%fill_value > IO_FILL_UNSET) then
          stat = nf90_put_att(ncid, varid, "_FillValue", var%meta%fill_value)
       end if
 

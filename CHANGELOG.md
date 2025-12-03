@@ -123,12 +123,61 @@ nml_verbose = 2                  ! Debug: every write operation
 
 **Files changed:** 
 - `io_constants.F90` — New variables `io_flush_freq`, `io_verbose`
+
+---
+
+### 7. Unified Error Handling
+
+**Problem:**  
+Inconsistent error handling with mix of `print *` statements and ignored return codes.
+
+**Solution:**  
+New `io_errors.F90` module providing:
+
+```fortran
+call io_error(source, message, fatal=.true.)   ! Fatal error (stops program)
+call io_error(source, message, fatal=.false.)  ! Non-fatal error
+call io_warning(source, message)               ! Warning (continues)
+call io_info(message)                          ! Info (respects verbosity)
+call io_debug(source, message)                 ! Debug (only in verbose=2)
+```
+
+**Features:**
+- Error/warning counters (`io_error_count()`, `io_warning_count()`)
+- Consistent formatting with source identification
+- Fatal errors show clear banner before stopping
+- Respects verbosity level
+
+**Files changed:** 
+- `io_errors.F90` — New module
+- `io_manager.F90` — Uses new error functions
+
+---
+
+### 8. Proper FillValue Support
+
+**Problem:**  
+Fill value was hardcoded to -9999.0 with unreliable detection.
+
+**Solution:**  
+- New constants: `IO_FILL_VALUE` (NetCDF standard), `IO_FILL_UNSET` (sentinel)
+- `_FillValue` attribute written only when explicitly set by user
+- Default: unset (NetCDF uses its own default)
+
+```fortran
+call define_2d_var("sst", "SST", "degC", grd, data, fill_value=9.96921e+36)
+```
+
+**Files changed:** 
+- `io_constants.F90` — New constants
+- `io_definitions.F90` — Uses `IO_FILL_UNSET`
+- `io_netcdf.F90` — Proper FillValue detection
 - `io_config.F90` — Namelist parameters, conditional printing
 - `io_manager.F90` — `maybe_flush()` subroutine, verbose messages
 
 ---
 
-### 7. Cleanup: Removed Obsolete Constants
+### 9. Cleanup: Removed Obsolete Constants
 
 Removed from `io_constants.F90`: `IO_TYPE_HIS`, `IO_TYPE_AVG`, `IO_TYPE_RST`
 
@@ -138,11 +187,12 @@ Removed from `io_constants.F90`: `IO_TYPE_HIS`, `IO_TYPE_AVG`, `IO_TYPE_RST`
 
 | File | Changes |
 |------|---------|
-| `io_constants.F90` | Compression, flush, verbose variables |
+| `io_constants.F90` | Compression, flush, verbose, FillValue constants |
 | `io_config.F90` | Groups, restart, flush, verbose namelist |
-| `io_manager.F90` | Validation, restart, flush, verbose |
-| `io_definitions.F90` | CF-compliant metadata |
-| `io_netcdf.F90` | NetCDF-4, CF attributes |
+| `io_errors.F90` | **New** - Unified error handling |
+| `io_manager.F90` | Validation, restart, flush, verbose, error handling |
+| `io_definitions.F90` | CF-compliant metadata, IO_FILL_UNSET |
+| `io_netcdf.F90` | NetCDF-4, CF attributes, FillValue |
 | `io_file_registry.F90` | Restart buffer and methods |
 | `netcdf_backend.F90` | Compression |
 | `var_definitions.F90` | Optional CF arguments |

@@ -20,7 +20,7 @@
 module io_definitions
    use grid_module, only: grid
    use io_constants, only: IO_VARNAME_LEN, IO_LONGNAME_LEN, IO_UNITS_LEN, &
-                           IO_INITIAL_ALLOC, IO_GROWTH_FACTOR
+                           IO_INITIAL_ALLOC, IO_GROWTH_FACTOR, IO_FILL_UNSET
    implicit none
    private
 
@@ -53,7 +53,7 @@ module io_definitions
       character(len=64) :: standard_name = ""           !< CF standard name
       real :: valid_min = -huge(1.0)                    !< Minimum valid value
       real :: valid_max = huge(1.0)                     !< Maximum valid value
-      real :: fill_value = -9999.0                      !< Missing data value
+      real :: fill_value = IO_FILL_UNSET                !< Missing data value (unset by default)
       character(len=64) :: coordinates = ""             !< Coordinate variables (e.g., "lat lon")
    end type var_metadata
 
