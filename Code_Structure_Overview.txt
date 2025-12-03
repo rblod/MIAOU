@@ -1,0 +1,222 @@
++------------------------------------------+
+|        MIAOU v0.8.0 - STRUCTURE         |
++------------------------------------------+
+
++------------------------------------------+
+|           COUCHES PRINCIPALES            |
++------------------------------------------+
+
++---------------+       +---------------+       +---------------+
+|   DÉFINITION  |       | CONFIGURATION |       |   OPÉRATIONS  |
+|  DES DONNÉES  | <---> |    D'E/S      | <---> |     D'E/S     |
++---------------+       +---------------+       +---------------+
+      ^                        ^                      ^
+      |                        |                      |
+      v                        v                      v
++---------------+       +---------------+       +---------------+
+|   REGISTRE    |       |  REGISTRE    |       | IMPLÉMENTATION|
+| DES VARIABLES |       | DES FICHIERS |       |    NETCDF     |
++---------------+       +---------------+       +---------------+
+
++------------------------------------------+
+|       DÉPENDANCES ENTRE MODULES          |
++------------------------------------------+
+
+                     +----------------+
+                     | io_constants   |  <- Constantes globales
+                     +----------------+
+                            ^
+                            |
+        +-------------------+-------------------+
+        |                   |                   |
+        v                   v                   v
++----------------+  +----------------+  +----------------+
+| grid_module    |  |   io_error     |  | netcdf_utils   |
++----------------+  +----------------+  +----------------+
+        ^                                       ^
+        |                                       |
+        v                                       v
++----------------+                      +----------------+
+| io_definitions |                      | netcdf_backend |
++----------------+                      +----------------+
+        ^                                       ^
+        |                                       |
+        v                                       v
++----------------+                      +----------------+
+|io_file_registry|                      |   io_netcdf    |
++----------------+                      +----------------+
+        ^                                       ^
+        |                                       |
+        +-------------------+-------------------+
+                            |
+                            v
+                     +----------------+
+                     |   io_config    |  <- Lecture namelist
+                     +----------------+
+                            ^
+                            |
+                            v
+                     +----------------+
+                     |   io_naming    |
+                     +----------------+
+                            ^
+                            |
+                            v
+                     +----------------+
+                     |  io_manager    |  <- Point d'entrée principal
+                     +----------------+
+                            ^
+                            |
+        +-------------------+-------------------+
+        |                                       |
+        v                                       v
++----------------+                      +----------------+
+|var_definitions |                      |  ocean_var     |
++----------------+                      +----------------+
+        ^
+        |
+        v
++----------------+
+| var_registry   |
++----------------+
+        ^
+        |
+        v
++----------------+
+|main_test_output|
++----------------+
+
++------------------------------------------+
+|         ARCHITECTURE FILE-CENTRIC        |
++------------------------------------------+
+
+    NAMELIST                    RUNTIME
+    --------                    -------
+                           
++-------------+            +-------------+
+| group_name  |            | var_groups  |
+| group_vars  | ---------> | (expanded)  |
++-------------+            +-------------+
+                                  |
++-------------+            +------v------+
+| file_name   |            | output_file |
+| file_freq   | ---------> |    _def     |
+| file_vars   |            | (registry)  |
+| file_restart|            +-------------+
++-------------+                   |
+                                  v
+                           +-------------+
+                           |  NetCDF     |
+                           |  files      |
+                           +-------------+
+
++------------------------------------------+
+|             FLUX DES DONNÉES             |
++------------------------------------------+
+
+[Définition] --> [Registre] --> [Config] --> [Manager] --> [Backend] --> [*.nc]
+                                   |
+                                   v
+                            [Groupes de variables]
+                            [@surface, @prognostic]
+
++------------------------------------------+
+|         HIÉRARCHIE FONCTIONNELLE         |
++------------------------------------------+
+
+main_test_output.F90
+  |
+  +--> initialize_io() [io_manager]
+  |      |
+  |      +--> nc_initialize() [io_netcdf]
+  |      +--> read_io_config() [io_config]
+  |             |
+  |             +--> expand_groups() [io_config]
+  |             +--> file_registry%add() [io_file_registry]
+  |
+  +--> init_variables() [var_registry]
+  |      |
+  |      +--> create_*_grid() [grid_module]
+  |      +--> init_var_definitions() [var_definitions]
+  |            |
+  |            +--> define_*d_var() [var_definitions]
+  |      +--> register_variable() [io_manager]
+  |
+  +--> validate_config() [io_manager]
+  |
+  +--> create_all_files() [io_manager]
+  |      |
+  |      +--> generate_filename() [io_naming]
+  |      +--> nc_create_file() [io_netcdf]
+  |      |      |
+  |      |      +--> Global attributes (CF-compliant)
+  |      |      +--> Compression settings
+  |      +--> nc_define_variable_in_file() [io_netcdf]
+  |            |
+  |            +--> nc_define_variable() [netcdf_backend]
+  |            +--> add_cf_attributes() [io_netcdf]
+  |
+  +--> write_output(time) [io_manager]  <- Appelé à chaque pas de temps
+  |      |
+  |      +--> process_file() [io_manager]
+  |             |
+  |             +--> update_averaging() [io_manager]
+  |             +--> write_file_instant() / write_file_averaged()
+  |             |      |
+  |             |      +--> nc_write_variable_data() [io_netcdf]
+  |             |      +--> nc_write_time() [io_netcdf]
+  |             |      +--> maybe_flush() [io_manager]
+  |             +--> reset_file_averaging() [io_manager]
+  |
+  +--> finalize_io() [io_manager]
+         |
+         +--> process_restart_file() [io_manager]  <- Si is_final
+         +--> nc_close_file() [io_netcdf]
+         +--> nc_finalize() [io_netcdf]
+
++------------------------------------------+
+|          FICHIERS PAR CATÉGORIE          |
++------------------------------------------+
+
+CONSTANTES & UTILITAIRES:
+  io_constants.F90    - Constantes globales (longueurs, compression, verbose)
+  io_error.F90        - Gestion des erreurs
+  netcdf_utils.F90    - Utilitaires NetCDF (nc_check)
+
+GRILLES & DONNÉES:
+  grid_module.F90     - Types grid et axis
+  ocean_var.F90       - Variables du modèle (zeta, u, v, temp...)
+
+DÉFINITIONS I/O:
+  io_definitions.F90  - Types var_metadata, var_data_ptr, io_variable
+  io_file_registry.F90- Types output_file_def, avg_state
+
+CONFIGURATION:
+  io_config.F90       - Lecture namelist, expansion groupes
+  io_naming.F90       - Génération noms de fichiers
+
+BACKEND NETCDF:
+  netcdf_backend.F90  - Opérations NetCDF bas niveau
+  io_netcdf.F90       - Implémentation NetCDF haut niveau
+
+ORCHESTRATION:
+  io_manager.F90      - Point d'entrée, coordination
+
+DÉFINITION VARIABLES:
+  var_definitions.F90 - Fonctions define_*d_var
+  var_registry.F90    - Création grilles, enregistrement
+
+TEST:
+  main_test_output.F90- Programme de test
+
++------------------------------------------+
+|        POINT D'EXTENSION BACKEND         |
++------------------------------------------+
+
+Pour ajouter un nouveau backend (HDF5, ADIOS2...):
+
+1. Créer hdf5_backend.F90 avec mêmes interfaces que netcdf_backend.F90
+2. Créer io_hdf5.F90 avec mêmes interfaces que io_netcdf.F90
+3. Modifier io_manager.F90 pour sélectionner le backend
+
+Future v2.0: Interface abstraite io_backend avec factory pattern

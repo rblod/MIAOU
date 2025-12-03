@@ -1,23 +1,65 @@
-&output_global
-  output_prefix = "ocean"
-  global_freq_his = 3600.0
-  global_freq_avg = 7200.0
-  global_freq_rst = 9000.0
-  global_to_his = .false.
-  global_to_avg = .true.
-  global_to_rst = .true.
-/
+&io_files_nml
+   ! Global settings
+   nml_output_prefix = "ocean"
+   nml_time_units = "seconds since 2023-01-01 00:00:00"
+   nml_calendar = "gregorian"
+   
+   ! Compression settings (NetCDF-4)
+   nml_compression = .true.         ! Enable/disable compression
+   nml_compression_level = 4        ! 0-9 (0=none, 9=max, 4=default)
+   
+   ! Flush and verbosity
+   nml_flush_freq = 0               ! Sync to disk every N writes (0=disabled)
+   nml_verbose = 1                  ! 0=quiet, 1=normal, 2=debug
 
-&output_dyn
-  ! Format: "name", write_his, write_avg, write_rst, "file_prefix", freq_his, freq_avg, freq_rst
-  ! 2D variables (existing)
-  dyn_vars(1) = "zeta",.true. , .true., .false., "", 3600., 7200., -1.
-  dyn_vars(2) = "u",    .false., .false., .true., "u", -1., -1., 9000.
-  dyn_vars(3) = "v",    .false., .false., .true., "special", -1., -1., 7200.
-  ! 3D variable (full 3D now used)
-  dyn_vars(4) = "temp", .true., .false., .true., "temperature", 3600., -1., 9000.
-  ! 0D scalar variable (new)
-  dyn_vars(5) = "wind_speed", .true., .true., .false., "meteo", 1800., 3600., -1.
-  ! 1D profile variable (new)
-  dyn_vars(6) = "temp_profile", .true., .true., .true., "profile", 1800., 3600., 7200.
+   !---------------------------------------------------------------------------
+   ! Variable groups - define reusable sets of variables
+   !---------------------------------------------------------------------------
+   
+   ! Surface 2D fields (currents + SSH)
+   group_name(1) = "surface"
+   group_vars(1) = "zeta,u,v"
+   
+   ! Atmospheric forcing
+   group_name(2) = "atm"
+   group_vars(2) = "wind_speed"
+   
+   ! 3D and profile variables
+   group_name(3) = "thermo"
+   group_vars(3) = "temp,temp_profile"
+   
+   ! Prognostic variables for restart
+   group_name(4) = "prognostic"
+   group_vars(4) = "zeta,u,v,temp"
+
+   !---------------------------------------------------------------------------
+   ! Output files - use @groupname to reference groups
+   !---------------------------------------------------------------------------
+
+   ! File 1: Hourly instantaneous - all surface + atmospheric
+   file_name(1) = "hourly"
+   file_freq(1) = 3600.0
+   file_operation(1) = "instant"
+   file_vars(1) = "@surface,@atm"
+
+   ! File 2: 6-hourly instantaneous - SSH + temperature
+   file_name(2) = "6hourly"
+   file_freq(2) = 21600.0
+   file_operation(2) = "instant"
+   file_vars(2) = "zeta,temp"
+
+   ! File 3: Daily averages - surface + thermo
+   file_name(3) = "daily_avg"
+   file_freq(3) = 86400.0
+   file_operation(3) = "average"
+   file_vars(3) = "@surface,@thermo"
+   
+   ! File 4: Restart - final only, 2 time levels for leapfrog
+   file_name(4) = "restart"
+   file_freq(4) = -1.0
+   file_operation(4) = "instant"
+   file_vars(4) = "@prognostic"
+   file_restart(4) = .true.
+   file_restart_nlevels(4) = 2
+   file_double(4) = .true.
 /

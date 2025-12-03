@@ -45,7 +45,7 @@ pip install --upgrade pip
 
 # Install required Python packages in the virtual environment
 echo "Installing Python packages in virtual environment..."
-pip install numpy matplotlib xarray dask[array] scipy
+pip install numpy matplotlib xarray dask[array] scipy netCDF4
 
 # Check if installations were successful
 echo "Verifying installations..."

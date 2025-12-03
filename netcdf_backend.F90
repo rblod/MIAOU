@@ -14,21 +14,22 @@ module netcdf_backend
    use netcdf
    use netcdf_utils
    use grid_module
+   use io_constants, only: io_compression_enabled, io_compression_level
    implicit none
    private
 
    ! Public interface
-   public :: nc_check, nc_define_variable, nc_write_variable
+   public :: nc_define_variable, nc_write_variable
 
    !> Generic interface for writing variables of different dimensions
    !>
    !> This interface selects the appropriate specific procedure based on
    !> the dimensionality of the data being written.
    interface nc_write_variable
-      module procedure nc_write_scalar
-      module procedure nc_write_1d
-      module procedure nc_write_2d
-      module procedure nc_write_3d
+      module procedure nc_write_scalar      ! For 0D (scalar) values
+      module procedure nc_write_1d          ! For 1D arrays
+      module procedure nc_write_2d          ! For 2D arrays
+      module procedure nc_write_3d          ! For 3D arrays
    end interface nc_write_variable
 
 contains
@@ -106,6 +107,14 @@ contains
       call nc_check(nf90_def_var(ncid, var_name, nf90_real, dim_ids, varid), &
                     "Create variable : "//trim(var_name))
 
+      ! Enable compression for non-scalar variables (NetCDF-4 feature)
+      ! Settings come from namelist via io_constants
+      if (ndims > 0 .and. io_compression_enabled) then
+         ncerr = nf90_def_var_deflate(ncid, varid, shuffle=1, deflate=1, &
+                                      deflate_level=io_compression_level)
+         ! Ignore errors - compression may not be available
+      end if
+
       ! Add attributes
       call nc_check(nf90_put_att(ncid, varid, "long_name", trim(var_long_name)), &
                     "Create attribute : "//trim(var_long_name))
@@ -116,11 +125,7 @@ contains
       deallocate (dim_ids)
    end subroutine nc_define_variable
 
-   !---------------------------------------------------------------------------
-   ! Variable writing for different dimensions
-   !---------------------------------------------------------------------------
-
-   !> Write a scalar (0D) variable to a NetCDF file
+   !> Write a scalar variable to a NetCDF file
    !>
    !> @param[in] ncid        NetCDF file ID
    !> @param[in] varid       Variable ID in the file
@@ -128,13 +133,17 @@ contains
    !> @param[in] time_index  Index of the time step to write
    subroutine nc_write_scalar(ncid, varid, data, time_index)
       integer, intent(in) :: ncid, varid, time_index
-      real, intent(in) :: data
+      real, intent(in) :: data  ! Can be a scalar or dimensioned array (0)
       integer :: start(1), count(1)
+      real :: value
+
+      ! Get value, whether from scalar or array
+      value = data
 
       start = [time_index]
       count = [1]
 
-      call nc_check(nf90_put_var(ncid, varid, [data], start=start, count=count))
+      call nc_check(nf90_put_var(ncid, varid, [value], start=start, count=count))
    end subroutine nc_write_scalar
 
    !> Write a 1D variable to a NetCDF file
@@ -145,7 +154,7 @@ contains
    !> @param[in] time_index  Index of the time step to write
    subroutine nc_write_1d(ncid, varid, data, time_index)
       integer, intent(in) :: ncid, varid, time_index
-      real, intent(in) :: data(:)
+      real, intent(in) :: data(:)    ! Accepts any 1D array
       integer :: start(2), count(2)
 
       start = [1, time_index]
@@ -162,7 +171,7 @@ contains
    !> @param[in] time_index  Index of the time step to write
    subroutine nc_write_2d(ncid, varid, data, time_index)
       integer, intent(in) :: ncid, varid, time_index
-      real, intent(in) :: data(:, :)
+      real, intent(in) :: data(:, :)    ! Accepts any 2D array
       integer :: start(3), count(3)
 
       start = [1, 1, time_index]
@@ -179,7 +188,7 @@ contains
    !> @param[in] time_index  Index of the time step to write
    subroutine nc_write_3d(ncid, varid, data, time_index)
       integer, intent(in) :: ncid, varid, time_index
-      real, intent(in) :: data(:, :, :)
+      real, intent(in) :: data(:, :, :)    ! Accepts any 3D array
       integer :: start(4), count(4)
 
       start = [1, 1, 1, time_index]
