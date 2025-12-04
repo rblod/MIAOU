@@ -13,6 +13,7 @@
 !===============================================================================
 program main_test_output
    use var_registry
+   use var_definitions, only: send_all_outputs
    use io_manager
    use ocean_var
    use grid_module
@@ -65,6 +66,9 @@ program main_test_output
    print *, "  Simulation: ", nt, " steps of ", dt_sim, " seconds"
    print *, ""
 
+   ! Create files before the loop (needed for averaging)
+   call ensure_files_created()
+
    do t = 1, nt
       current_time = t * dt_sim
 
@@ -75,6 +79,9 @@ program main_test_output
       temp = 15.0 + 2.0 * sin(current_time / 43200.0)  ! Daily temperature cycle
       temp_profile = 15.0 - 0.5 * [(i, i=1,nz)]   ! Decreasing with depth
       wind_speed = 5.0 + 3.0 * sin(current_time / 21600.0)  ! 6-hour wind cycle
+
+      ! Send all outputs (copy data to internal buffers)
+      call send_all_outputs(current_time)
 
       ! Write outputs (io_manager handles timing for each file)
       if (t == nt) then
