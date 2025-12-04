@@ -54,9 +54,9 @@
    file_operation(3) = "average"
    file_vars(3) = "@surface,@thermo"
    
-   ! File 4: Restart - final only, 2 time levels for leapfrog
+   ! File 4: Restart - every hour, keep last 2 levels
    file_name(4) = "restart"
-   file_freq(4) = -1.0
+   file_freq(4) = 3600.0
    file_operation(4) = "instant"
    file_vars(4) = "@prognostic"
    file_restart(4) = .true.

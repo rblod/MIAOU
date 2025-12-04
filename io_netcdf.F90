@@ -29,6 +29,8 @@ module io_netcdf
    public :: nc_write_variable_data
    public :: nc_write_avg_data
    public :: nc_write_time
+   ! Direct write (no buffer) - for instant outputs
+   public :: nc_write_direct_0d, nc_write_direct_1d, nc_write_direct_2d, nc_write_direct_3d
 
    ! Module state
    logical, private :: is_initialized = .false.
@@ -280,25 +282,42 @@ contains
       end if
 
       ! Write based on dimensionality
+      ! Uses buffers if use_buffer is true, otherwise pointers
       select case (var%meta%ndims)
       case (0)
          if (var%data%is_valid(0)) then
-            call nc_write_variable(ncid, varid, var%data%scalar, time_index)
+            if (var%data%use_buffer) then
+               call nc_write_variable(ncid, varid, var%data%buf_scalar, time_index)
+            else
+               call nc_write_variable(ncid, varid, var%data%scalar, time_index)
+            end if
             status = 0
          end if
       case (1)
          if (var%data%is_valid(1)) then
-            call nc_write_variable(ncid, varid, var%data%d1, time_index)
+            if (var%data%use_buffer) then
+               call nc_write_variable(ncid, varid, var%data%buf_1d, time_index)
+            else
+               call nc_write_variable(ncid, varid, var%data%d1, time_index)
+            end if
             status = 0
          end if
       case (2)
          if (var%data%is_valid(2)) then
-            call nc_write_variable(ncid, varid, var%data%d2, time_index)
+            if (var%data%use_buffer) then
+               call nc_write_variable(ncid, varid, var%data%buf_2d, time_index)
+            else
+               call nc_write_variable(ncid, varid, var%data%d2, time_index)
+            end if
             status = 0
          end if
       case (3)
          if (var%data%is_valid(3)) then
-            call nc_write_variable(ncid, varid, var%data%d3, time_index)
+            if (var%data%use_buffer) then
+               call nc_write_variable(ncid, varid, var%data%buf_3d, time_index)
+            else
+               call nc_write_variable(ncid, varid, var%data%d3, time_index)
+            end if
             status = 0
          end if
       end select
@@ -334,6 +353,7 @@ contains
       end if
 
       ! Compute and write based on dimensionality
+      ! NOTE: We use state buffers for shape, not var%data (which may be empty)
       select case (var%meta%ndims)
       case (0)
          success = state%compute_scalar(scalar_result)
@@ -343,8 +363,8 @@ contains
          end if
 
       case (1)
-         if (var%data%is_valid(1)) then
-            call var%data%get_shape(1, shp)
+         if (allocated(state%d1)) then
+            shp(1) = size(state%d1)
             allocate(result_1d(shp(1)))
             success = state%compute_1d(result_1d)
             if (success) then
@@ -355,8 +375,9 @@ contains
          end if
 
       case (2)
-         if (var%data%is_valid(2)) then
-            call var%data%get_shape(2, shp)
+         if (allocated(state%d2)) then
+            shp(1) = size(state%d2, 1)
+            shp(2) = size(state%d2, 2)
             allocate(result_2d(shp(1), shp(2)))
             success = state%compute_2d(result_2d)
             if (success) then
@@ -367,8 +388,10 @@ contains
          end if
 
       case (3)
-         if (var%data%is_valid(3)) then
-            call var%data%get_shape(3, shp)
+         if (allocated(state%d3)) then
+            shp(1) = size(state%d3, 1)
+            shp(2) = size(state%d3, 2)
+            shp(3) = size(state%d3, 3)
             allocate(result_3d(shp(1), shp(2), shp(3)))
             success = state%compute_3d(result_3d)
             if (success) then
@@ -412,5 +435,69 @@ contains
 
       status = 0
    end function nc_write_time
+
+   !---------------------------------------------------------------------------
+   !> @brief Write scalar data directly (no buffer)
+   !---------------------------------------------------------------------------
+   function nc_write_direct_0d(ncid, var_name, time_index, val) result(status)
+      integer, intent(in) :: ncid, time_index
+      character(len=*), intent(in) :: var_name
+      real, intent(in) :: val
+      integer :: status, varid
+
+      status = -1
+      if (ncid <= 0) return
+      if (nf90_inq_varid(ncid, trim(var_name), varid) /= nf90_noerr) return
+      call nc_write_variable(ncid, varid, val, time_index)
+      status = 0
+   end function nc_write_direct_0d
+
+   !---------------------------------------------------------------------------
+   !> @brief Write 1D data directly (no buffer)
+   !---------------------------------------------------------------------------
+   function nc_write_direct_1d(ncid, var_name, time_index, val) result(status)
+      integer, intent(in) :: ncid, time_index
+      character(len=*), intent(in) :: var_name
+      real, intent(in) :: val(:)
+      integer :: status, varid
+
+      status = -1
+      if (ncid <= 0) return
+      if (nf90_inq_varid(ncid, trim(var_name), varid) /= nf90_noerr) return
+      call nc_write_variable(ncid, varid, val, time_index)
+      status = 0
+   end function nc_write_direct_1d
+
+   !---------------------------------------------------------------------------
+   !> @brief Write 2D data directly (no buffer)
+   !---------------------------------------------------------------------------
+   function nc_write_direct_2d(ncid, var_name, time_index, val) result(status)
+      integer, intent(in) :: ncid, time_index
+      character(len=*), intent(in) :: var_name
+      real, intent(in) :: val(:,:)
+      integer :: status, varid
+
+      status = -1
+      if (ncid <= 0) return
+      if (nf90_inq_varid(ncid, trim(var_name), varid) /= nf90_noerr) return
+      call nc_write_variable(ncid, varid, val, time_index)
+      status = 0
+   end function nc_write_direct_2d
+
+   !---------------------------------------------------------------------------
+   !> @brief Write 3D data directly (no buffer)
+   !---------------------------------------------------------------------------
+   function nc_write_direct_3d(ncid, var_name, time_index, val) result(status)
+      integer, intent(in) :: ncid, time_index
+      character(len=*), intent(in) :: var_name
+      real, intent(in) :: val(:,:,:)
+      integer :: status, varid
+
+      status = -1
+      if (ncid <= 0) return
+      if (nf90_inq_varid(ncid, trim(var_name), varid) /= nf90_noerr) return
+      call nc_write_variable(ncid, varid, val, time_index)
+      status = 0
+   end function nc_write_direct_3d
 
 end module io_netcdf

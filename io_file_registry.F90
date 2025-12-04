@@ -120,6 +120,7 @@ module io_file_registry
       integer :: time_dimid = -1                      !< Time dimension ID
       integer :: time_varid = -1                      !< Time variable ID
       integer :: time_index = 1                       !< Current time index
+      logical :: data_written_this_step = .false.     !< Flag for direct write mode
       
       ! Averaging state (one per variable)
       type(avg_state), allocatable :: avg_states(:)

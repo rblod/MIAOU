@@ -3,9 +3,10 @@
 !>
 !> @brief Module for oceanographic variable definitions
 !>
-!> This module provides a declarative approach to defining output variables
-!> in an oceanographic model. Users simply need to add their variables to the
-!> init_var_definitions subroutine with minimal information required.
+!> Variables are defined in a SINGLE file: output_vars.inc
+!> To add a new variable, edit ONLY that file.
+!>
+!> Model variables do NOT need the 'target' attribute - MIAOU uses internal buffers.
 !>
 !> @author Rachid Benshila
 !> @date 2025-04
@@ -13,267 +14,215 @@
 module var_definitions
    use grid_module, only: grid
    use io_definitions, only: io_variable
+   use io_manager, only: var_registry, get_variable_ptr, process_var_instant, &
+                         process_var_average
    use ocean_var
    implicit none
    private
 
-   !> Common grid definitions (to be initialized in var_registry)
-   type(grid), public :: grd_scalar  !< Grid for scalar variables
-   type(grid), public :: grd_profile !< 1D grid for profiles
-   type(grid), public :: grd_rho     !< 2D rho-grid (cell centers)
-   type(grid), public :: grd_u       !< 2D u-grid (x-velocity points)
-   type(grid), public :: grd_v       !< 2D v-grid (y-velocity points)
-   type(grid), public :: grd_rho3d   !< 3D rho-grid (cell centers)
+   !> Grids
+   type(grid), public :: grd_scalar
+   type(grid), public :: grd_profile
+   type(grid), public :: grd_rho
+   type(grid), public :: grd_u
+   type(grid), public :: grd_v
+   type(grid), public :: grd_rho3d
 
-   !> Maximum number of variables to export
-   integer, parameter :: MAX_VARS = 10
-
-   !> Number of defined variables
+   integer, parameter :: MAX_VARS = 100
    integer, public :: num_vars = 0
+   type(io_variable), public, allocatable, target :: model_vars(:)
 
-   !> Array of variables to be exported
-   type(io_variable), public, allocatable :: model_vars(:)
+   !> Restart flags for each variable (indexed by name)
+   character(len=64), private :: restart_var_names(MAX_VARS)
+   integer, private :: num_restart_vars = 0
 
-   public :: init_var_definitions, define_0d_var, define_1d_var, define_2d_var, define_3d_var
+   public :: init_var_definitions
+   public :: send_all_outputs
+   public :: send_var
+
+   !> Generic interface for send_var
+   interface send_var
+      module procedure send_var_0d
+      module procedure send_var_1d
+      module procedure send_var_2d
+      module procedure send_var_3d
+   end interface send_var
 
 contains
 
    !---------------------------------------------------------------------------
+   !> @brief Check if a variable needs restart buffer (local, fast lookup)
+   !---------------------------------------------------------------------------
+   function needs_restart_buffer(var_name) result(needs)
+      character(len=*), intent(in) :: var_name
+      logical :: needs
+      integer :: i
+
+      needs = .false.
+      do i = 1, num_restart_vars
+         if (trim(restart_var_names(i)) == trim(var_name)) then
+            needs = .true.
+            return
+         end if
+      end do
+   end function needs_restart_buffer
+
+   !---------------------------------------------------------------------------
+   !> @brief Register a variable as needing restart buffer
+   !---------------------------------------------------------------------------
+   subroutine register_restart_var(var_name)
+      character(len=*), intent(in) :: var_name
+
+      num_restart_vars = num_restart_vars + 1
+      restart_var_names(num_restart_vars) = var_name
+   end subroutine register_restart_var
+
+   !---------------------------------------------------------------------------
    !> @brief Initialize all variables to be exported
-   !>
-   !> This is the main subroutine that users should modify when adding
-   !> new variables for output. Simply add a new call to the appropriate
-   !> define_Xd_var function with the required information.
-   !>
-   !> CF-compliant attributes (optional):
-   !> - standard_name: CF standard name from CF convention table
-   !> - valid_min/valid_max: Valid data range for quality control
-   !> - coordinates: Coordinate variables (e.g., "lat lon")
    !---------------------------------------------------------------------------
    subroutine init_var_definitions()
-      ! Reset the counter
+      
       num_vars = 0
-
-      ! Initialize the variables array
+      num_restart_vars = 0
       if (allocated(model_vars)) deallocate(model_vars)
       allocate(model_vars(MAX_VARS))
 
-      ! Define all export variables using type-specific helper functions
-      ! Example with CF-compliant attributes:
-      call define_2d_var("zeta", "free surface", "m", grd_rho, zeta, &
-                         standard_name="sea_surface_height_above_geoid", &
-                         valid_min=-10.0, valid_max=10.0, &
-                         coordinates="lat lon")
-      
-      call define_2d_var("u", "U-velocity", "m s-1", grd_u, u, &
-                         standard_name="sea_water_x_velocity", &
-                         valid_min=-10.0, valid_max=10.0)
-      
-      call define_2d_var("v", "V-velocity", "m s-1", grd_v, v, &
-                         standard_name="sea_water_y_velocity", &
-                         valid_min=-10.0, valid_max=10.0)
-      
-      call define_3d_var("temp", "potential temperature", "degC", grd_rho3d, temp, &
-                         standard_name="sea_water_potential_temperature", &
-                         valid_min=-2.0, valid_max=40.0)
-      
-      call define_1d_var("temp_profile", "Temperature profile", "degC", grd_profile, temp_profile)
-      
-      call define_0d_var("wind_speed", "Wind speed at 10m", "m s-1", grd_scalar, wind_speed, &
-                         standard_name="wind_speed", &
-                         valid_min=0.0, valid_max=100.0)
+#define OUTVAR(vname, long, units, vgrid, nd, var, is_rst) call define_var(vname, long, units, vgrid, nd, is_rst);
+#include "output_vars.inc"
+#undef OUTVAR
 
-      ! To add a new variable, simply add another call to the appropriate define_Xd_var function:
-      ! call define_2d_var("new_var", "description", "units", appropriate_grid, data_pointer, &
-      !                    standard_name="cf_standard_name", valid_min=0.0, valid_max=100.0)
+      print *, "Initialized ", num_vars, " output variables from output_vars.inc"
+      print *, "  Restart variables: ", num_restart_vars
+
    end subroutine init_var_definitions
 
    !---------------------------------------------------------------------------
-   !> @brief Define a 0D (scalar) variable
+   !> @brief Send all output variables
    !>
-   !> @param[in] name          Variable name for output
-   !> @param[in] long_name     Long descriptive name (for attribute)
-   !> @param[in] units         Units of the variable (for attribute)
-   !> @param[in] var_grid      Grid associated with the variable
-   !> @param[in] data          Reference to the scalar data
-   !> @param[in] standard_name Optional: CF standard name
-   !> @param[in] valid_min     Optional: Minimum valid value
-   !> @param[in] valid_max     Optional: Maximum valid value
-   !> @param[in] coordinates   Optional: Coordinate variables
+   !> For INSTANT files: writes directly if it's time to output
+   !> For AVERAGE files: accumulates in buffers
+   !> NO memory duplication for instant outputs!
    !---------------------------------------------------------------------------
-   subroutine define_0d_var(name, long_name, units, var_grid, data, &
-                            standard_name, valid_min, valid_max, coordinates)
+   subroutine send_all_outputs(current_time)
+      real, intent(in) :: current_time
+
+#define OUTVAR(vname, long, units, vgrid, nd, var, is_rst) call send_var(vname, var, current_time);
+#include "output_vars.inc"
+#undef OUTVAR
+
+   end subroutine send_all_outputs
+
+   !---------------------------------------------------------------------------
+   !> @brief Define a variable (metadata only)
+   !---------------------------------------------------------------------------
+   subroutine define_var(name, long_name, units, var_grid, ndims, is_restart)
       character(len=*), intent(in) :: name, long_name, units
       type(grid), intent(in) :: var_grid
-      real, target, intent(in) :: data
-      character(len=*), intent(in), optional :: standard_name
-      real, intent(in), optional :: valid_min, valid_max
-      character(len=*), intent(in), optional :: coordinates
+      integer, intent(in) :: ndims
+      logical, intent(in) :: is_restart
 
-      ! Increment the counter
       num_vars = num_vars + 1
-
       if (num_vars > MAX_VARS) then
-         print *, "ERROR: Too many variables defined. Increase MAX_VARS in var_definitions.F90"
+         print *, "ERROR: Too many variables. Increase MAX_VARS."
          stop 1
       end if
 
-      ! Initialize metadata
       model_vars(num_vars)%meta%name = name
       model_vars(num_vars)%meta%long_name = long_name
       model_vars(num_vars)%meta%units = units
       model_vars(num_vars)%meta%var_grid = var_grid
-      model_vars(num_vars)%meta%ndims = 0
+      model_vars(num_vars)%meta%ndims = ndims
+      model_vars(num_vars)%data%use_buffer = .true.
 
-      ! CF-compliant attributes
-      if (present(standard_name)) model_vars(num_vars)%meta%standard_name = standard_name
-      if (present(valid_min)) model_vars(num_vars)%meta%valid_min = valid_min
-      if (present(valid_max)) model_vars(num_vars)%meta%valid_max = valid_max
-      if (present(coordinates)) model_vars(num_vars)%meta%coordinates = coordinates
-
-      ! Associate data pointer
-      model_vars(num_vars)%data%scalar => data
-   end subroutine define_0d_var
-
-   !---------------------------------------------------------------------------
-   !> @brief Define a 1D variable
-   !>
-   !> @param[in] name          Variable name for output
-   !> @param[in] long_name     Long descriptive name (for attribute)
-   !> @param[in] units         Units of the variable (for attribute)
-   !> @param[in] var_grid      Grid associated with the variable
-   !> @param[in] data          Reference to the 1D array data
-   !> @param[in] standard_name Optional: CF standard name
-   !> @param[in] valid_min     Optional: Minimum valid value
-   !> @param[in] valid_max     Optional: Maximum valid value
-   !> @param[in] coordinates   Optional: Coordinate variables
-   !---------------------------------------------------------------------------
-   subroutine define_1d_var(name, long_name, units, var_grid, data, &
-                            standard_name, valid_min, valid_max, coordinates)
-      character(len=*), intent(in) :: name, long_name, units
-      type(grid), intent(in) :: var_grid
-      real, dimension(:), target, intent(in) :: data
-      character(len=*), intent(in), optional :: standard_name
-      real, intent(in), optional :: valid_min, valid_max
-      character(len=*), intent(in), optional :: coordinates
-
-      ! Increment the counter
-      num_vars = num_vars + 1
-
-      if (num_vars > MAX_VARS) then
-         print *, "ERROR: Too many variables defined. Increase MAX_VARS in var_definitions.F90"
-         stop 1
+      ! Register as restart variable if needed
+      if (is_restart) then
+         call register_restart_var(name)
       end if
 
-      ! Initialize metadata
-      model_vars(num_vars)%meta%name = name
-      model_vars(num_vars)%meta%long_name = long_name
-      model_vars(num_vars)%meta%units = units
-      model_vars(num_vars)%meta%var_grid = var_grid
-      model_vars(num_vars)%meta%ndims = 1
-
-      ! CF-compliant attributes
-      if (present(standard_name)) model_vars(num_vars)%meta%standard_name = standard_name
-      if (present(valid_min)) model_vars(num_vars)%meta%valid_min = valid_min
-      if (present(valid_max)) model_vars(num_vars)%meta%valid_max = valid_max
-      if (present(coordinates)) model_vars(num_vars)%meta%coordinates = coordinates
-
-      ! Associate data pointer
-      model_vars(num_vars)%data%d1 => data
-   end subroutine define_1d_var
+   end subroutine define_var
 
    !---------------------------------------------------------------------------
-   !> @brief Define a 2D variable
+   !> @brief Send 0D (scalar) variable
    !>
-   !> @param[in] name          Variable name for output
-   !> @param[in] long_name     Long descriptive name (for attribute)
-   !> @param[in] units         Units of the variable (for attribute)
-   !> @param[in] var_grid      Grid associated with the variable
-   !> @param[in] data          Reference to the 2D array data
-   !> @param[in] standard_name Optional: CF standard name
-   !> @param[in] valid_min     Optional: Minimum valid value
-   !> @param[in] valid_max     Optional: Maximum valid value
-   !> @param[in] coordinates   Optional: Coordinate variables
+   !> For INSTANT: writes directly to file (no buffer)
+   !> For AVERAGE: accumulates in buffer
+   !> For RESTART: stores in var_registry buffer (only if marked as restart)
    !---------------------------------------------------------------------------
-   subroutine define_2d_var(name, long_name, units, var_grid, data, &
-                            standard_name, valid_min, valid_max, coordinates)
-      character(len=*), intent(in) :: name, long_name, units
-      type(grid), intent(in) :: var_grid
-      real, dimension(:,:), target, intent(in) :: data
-      character(len=*), intent(in), optional :: standard_name
-      real, intent(in), optional :: valid_min, valid_max
-      character(len=*), intent(in), optional :: coordinates
+   subroutine send_var_0d(name, val, current_time)
+      character(len=*), intent(in) :: name
+      real, intent(in) :: val
+      real, intent(in) :: current_time
+      type(io_variable), pointer :: var_ptr
 
-      ! Increment the counter
-      num_vars = num_vars + 1
-
-      if (num_vars > MAX_VARS) then
-         print *, "ERROR: Too many variables defined. Increase MAX_VARS in var_definitions.F90"
-         stop 1
+      ! Store in var_registry ONLY for restart variables
+      if (needs_restart_buffer(name)) then
+         var_ptr => get_variable_ptr(name)
+         if (associated(var_ptr)) call var_ptr%data%set(val)
       end if
 
-      ! Initialize metadata
-      model_vars(num_vars)%meta%name = name
-      model_vars(num_vars)%meta%long_name = long_name
-      model_vars(num_vars)%meta%units = units
-      model_vars(num_vars)%meta%var_grid = var_grid
-      model_vars(num_vars)%meta%ndims = 2
+      ! Process for instant files (direct write, no buffer)
+      call process_var_instant(name, current_time, scalar=val)
+      
+      ! Process for average files (accumulate in buffer)
+      call process_var_average(name, scalar=val)
 
-      ! CF-compliant attributes
-      if (present(standard_name)) model_vars(num_vars)%meta%standard_name = standard_name
-      if (present(valid_min)) model_vars(num_vars)%meta%valid_min = valid_min
-      if (present(valid_max)) model_vars(num_vars)%meta%valid_max = valid_max
-      if (present(coordinates)) model_vars(num_vars)%meta%coordinates = coordinates
-
-      ! Associate data pointer
-      model_vars(num_vars)%data%d2 => data
-   end subroutine define_2d_var
+   end subroutine send_var_0d
 
    !---------------------------------------------------------------------------
-   !> @brief Define a 3D variable
-   !>
-   !> @param[in] name          Variable name for output
-   !> @param[in] long_name     Long descriptive name (for attribute)
-   !> @param[in] units         Units of the variable (for attribute)
-   !> @param[in] var_grid      Grid associated with the variable
-   !> @param[in] data          Reference to the 3D array data
-   !> @param[in] standard_name Optional: CF standard name
-   !> @param[in] valid_min     Optional: Minimum valid value
-   !> @param[in] valid_max     Optional: Maximum valid value
-   !> @param[in] coordinates   Optional: Coordinate variables
+   !> @brief Send 1D variable
    !---------------------------------------------------------------------------
-   subroutine define_3d_var(name, long_name, units, var_grid, data, &
-                            standard_name, valid_min, valid_max, coordinates)
-      character(len=*), intent(in) :: name, long_name, units
-      type(grid), intent(in) :: var_grid
-      real, dimension(:,:,:), target, intent(in) :: data
-      character(len=*), intent(in), optional :: standard_name
-      real, intent(in), optional :: valid_min, valid_max
-      character(len=*), intent(in), optional :: coordinates
+   subroutine send_var_1d(name, val, current_time)
+      character(len=*), intent(in) :: name
+      real, intent(in) :: val(:)
+      real, intent(in) :: current_time
+      type(io_variable), pointer :: var_ptr
 
-      ! Increment the counter
-      num_vars = num_vars + 1
-
-      if (num_vars > MAX_VARS) then
-         print *, "ERROR: Too many variables defined. Increase MAX_VARS in var_definitions.F90"
-         stop 1
+      if (needs_restart_buffer(name)) then
+         var_ptr => get_variable_ptr(name)
+         if (associated(var_ptr)) call var_ptr%data%set(val)
       end if
 
-      ! Initialize metadata
-      model_vars(num_vars)%meta%name = name
-      model_vars(num_vars)%meta%long_name = long_name
-      model_vars(num_vars)%meta%units = units
-      model_vars(num_vars)%meta%var_grid = var_grid
-      model_vars(num_vars)%meta%ndims = 3
+      call process_var_instant(name, current_time, d1=val)
+      call process_var_average(name, d1=val)
 
-      ! CF-compliant attributes
-      if (present(standard_name)) model_vars(num_vars)%meta%standard_name = standard_name
-      if (present(valid_min)) model_vars(num_vars)%meta%valid_min = valid_min
-      if (present(valid_max)) model_vars(num_vars)%meta%valid_max = valid_max
-      if (present(coordinates)) model_vars(num_vars)%meta%coordinates = coordinates
+   end subroutine send_var_1d
 
-      ! Associate data pointer
-      model_vars(num_vars)%data%d3 => data
-   end subroutine define_3d_var
+   !---------------------------------------------------------------------------
+   !> @brief Send 2D variable
+   !---------------------------------------------------------------------------
+   subroutine send_var_2d(name, val, current_time)
+      character(len=*), intent(in) :: name
+      real, intent(in) :: val(:,:)
+      real, intent(in) :: current_time
+      type(io_variable), pointer :: var_ptr
+
+      if (needs_restart_buffer(name)) then
+         var_ptr => get_variable_ptr(name)
+         if (associated(var_ptr)) call var_ptr%data%set(val)
+      end if
+
+      call process_var_instant(name, current_time, d2=val)
+      call process_var_average(name, d2=val)
+
+   end subroutine send_var_2d
+
+   !---------------------------------------------------------------------------
+   !> @brief Send 3D variable
+   !---------------------------------------------------------------------------
+   subroutine send_var_3d(name, val, current_time)
+      character(len=*), intent(in) :: name
+      real, intent(in) :: val(:,:,:)
+      real, intent(in) :: current_time
+      type(io_variable), pointer :: var_ptr
+
+      if (needs_restart_buffer(name)) then
+         var_ptr => get_variable_ptr(name)
+         if (associated(var_ptr)) call var_ptr%data%set(val)
+      end if
+
+      call process_var_instant(name, current_time, d3=val)
+      call process_var_average(name, d3=val)
+
+   end subroutine send_var_3d
 
 end module var_definitions
