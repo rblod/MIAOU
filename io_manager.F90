@@ -195,37 +195,6 @@ contains
    end subroutine ensure_files_created
 
    !---------------------------------------------------------------------------
-   !> @brief Check if a variable is in any restart file
-   !>
-   !> Returns true if the variable is referenced by at least one restart file.
-   !> Used to determine if we need to store the variable in var_registry buffer.
-   !---------------------------------------------------------------------------
-   function is_restart_variable(var_name) result(is_restart)
-      character(len=*), intent(in) :: var_name
-      logical :: is_restart
-
-      integer :: file_idx, j
-      type(output_file_def), pointer :: file_ptr
-
-      is_restart = .false.
-
-      do file_idx = 1, file_registry%size()
-         file_ptr => file_registry%get_ptr(file_idx)
-         if (.not. associated(file_ptr)) cycle
-         if (.not. file_ptr%is_restart) cycle
-
-         ! Check if variable is in this restart file
-         do j = 1, file_ptr%num_variables
-            if (trim(file_ptr%variables(j)) == trim(var_name)) then
-               is_restart = .true.
-               return
-            end if
-         end do
-      end do
-
-   end function is_restart_variable
-
-   !---------------------------------------------------------------------------
    !> @brief Create all output files
    !---------------------------------------------------------------------------
    subroutine create_all_files()
@@ -351,25 +320,6 @@ contains
          call file_ptr%init_avg_states()
       end if
    end subroutine define_variables_in_file
-
-   !---------------------------------------------------------------------------
-   !> @brief Initialize averaging state for a variable
-   !---------------------------------------------------------------------------
-   subroutine init_avg_state_for_var(file_ptr, var_ptr)
-      type(output_file_def), pointer, intent(inout) :: file_ptr
-      type(io_variable), pointer, intent(in) :: var_ptr
-
-      type(avg_state), pointer :: state_ptr
-      integer :: shp(3)
-
-      state_ptr => file_ptr%get_avg_state(var_ptr%meta%name)
-      if (.not. associated(state_ptr)) return
-      if (state_ptr%initialized) return
-
-      ! Get data shape and initialize
-      call var_ptr%data%get_shape(var_ptr%meta%ndims, shp)
-      call state_ptr%init(var_ptr%meta%name, file_ptr%operation, var_ptr%meta%ndims, shp)
-   end subroutine init_avg_state_for_var
 
    !---------------------------------------------------------------------------
    !> @brief Process a single file at current time
@@ -550,108 +500,6 @@ contains
    end function is_output_time
 
    !---------------------------------------------------------------------------
-   !> @brief Accumulate data for all variables in an averaging file
-   !---------------------------------------------------------------------------
-   subroutine accumulate_file_data(file_ptr)
-      type(output_file_def), pointer, intent(inout) :: file_ptr
-
-      integer :: i, var_idx
-      type(io_variable), pointer :: var_ptr
-      type(avg_state), pointer :: state_ptr
-
-      do i = 1, file_ptr%num_variables
-         var_idx = var_registry%find(file_ptr%variables(i))
-         if (var_idx < 0) cycle
-
-         var_ptr => var_registry%get_ptr(var_idx)
-         if (.not. associated(var_ptr)) cycle
-
-         state_ptr => file_ptr%get_avg_state(var_ptr%meta%name)
-         if (.not. associated(state_ptr)) cycle
-
-         ! Initialize if not done
-         if (.not. state_ptr%initialized) then
-            call init_avg_state_for_var(file_ptr, var_ptr)
-         end if
-
-         ! Accumulate based on dimensionality
-         ! Uses buffers if use_buffer is true, otherwise pointers
-         select case (var_ptr%meta%ndims)
-         case (0)
-            if (var_ptr%data%is_valid(0)) then
-               if (var_ptr%data%use_buffer) then
-                  call state_ptr%accumulate_scalar(var_ptr%data%buf_scalar)
-               else
-                  call state_ptr%accumulate_scalar(var_ptr%data%scalar)
-               end if
-            end if
-         case (1)
-            if (var_ptr%data%is_valid(1)) then
-               if (var_ptr%data%use_buffer) then
-                  call state_ptr%accumulate_1d(var_ptr%data%buf_1d)
-               else
-                  call state_ptr%accumulate_1d(var_ptr%data%d1)
-               end if
-            end if
-         case (2)
-            if (var_ptr%data%is_valid(2)) then
-               if (var_ptr%data%use_buffer) then
-                  call state_ptr%accumulate_2d(var_ptr%data%buf_2d)
-               else
-                  call state_ptr%accumulate_2d(var_ptr%data%d2)
-               end if
-            end if
-         case (3)
-            if (var_ptr%data%is_valid(3)) then
-               if (var_ptr%data%use_buffer) then
-                  call state_ptr%accumulate_3d(var_ptr%data%buf_3d)
-               else
-                  call state_ptr%accumulate_3d(var_ptr%data%d3)
-               end if
-            end if
-         end select
-      end do
-   end subroutine accumulate_file_data
-
-   !---------------------------------------------------------------------------
-   !> @brief Write instantaneous data for all variables in a file
-   !---------------------------------------------------------------------------
-   subroutine write_file_instant(file_ptr, current_time)
-      type(output_file_def), pointer, intent(inout) :: file_ptr
-      real, intent(in) :: current_time
-
-      integer :: i, var_idx, status
-      type(io_variable), pointer :: var_ptr
-      logical :: any_written
-
-      any_written = .false.
-
-      do i = 1, file_ptr%num_variables
-         var_idx = var_registry%find(file_ptr%variables(i))
-         if (var_idx < 0) cycle
-
-         var_ptr => var_registry%get_ptr(var_idx)
-         if (.not. associated(var_ptr)) cycle
-
-         status = nc_write_variable_data(file_ptr%backend_id, file_ptr%time_index, var_ptr)
-         if (status == 0) any_written = .true.
-      end do
-
-      if (any_written) then
-         status = nc_write_time(file_ptr%backend_id, file_ptr%time_varid, &
-                                file_ptr%time_index, current_time)
-         call file_ptr%increment_time()
-         
-         ! Periodic flush
-         call maybe_flush(file_ptr)
-         
-         if (io_verbose >= IO_DEBUG) then
-            print *, "  Written instant: ", trim(file_ptr%name), " t=", current_time
-         end if
-      end if
-   end subroutine write_file_instant
-
-   !---------------------------------------------------------------------------
    !> @brief Write averaged data for all variables in a file
    !---------------------------------------------------------------------------
    subroutine write_file_averaged(file_ptr, current_time)
@@ -711,106 +559,6 @@ contains
          end if
       end do
    end subroutine reset_file_averaging
-
-   !---------------------------------------------------------------------------
-   !> @brief Write restart file with N time levels
-   !>
-   !> This creates/overwrites the restart file with the last N time levels.
-   !> The data is read from the model variables at the current time - we 
-   !> assume the model stores previous time levels internally.
-   !>
-   !> Note: For a proper multi-level restart, the model must provide access
-   !> to previous time level data. This implementation writes the current
-   !> state N times with the stored time values.
-   !---------------------------------------------------------------------------
-   subroutine write_restart_file(file_ptr, current_time)
-      type(output_file_def), pointer, intent(inout) :: file_ptr
-      real, intent(in) :: current_time
-
-      integer :: i, j, var_idx, status, level
-      integer :: start_idx, nlevels_to_write
-      type(io_variable), pointer :: var_ptr
-      real :: time_val
-
-      ! Close existing file if open (we overwrite)
-      if (file_ptr%backend_id > 0) then
-         status = nc_close_file(file_ptr%backend_id)
-         file_ptr%backend_id = -1
-      end if
-
-      ! Recreate the file
-      status = nc_create_file(file_ptr%filename, file_ptr%name, file_ptr%frequency, &
-                              get_time_units(), get_calendar(), &
-                              file_ptr%backend_id, file_ptr%time_dimid, &
-                              file_ptr%time_varid)
-
-      if (status /= 0) then
-         print *, "ERROR: Failed to create restart file: ", trim(file_ptr%filename)
-         return
-      end if
-
-      ! Define variables
-      do i = 1, file_ptr%num_variables
-         var_idx = var_registry%find(file_ptr%variables(i))
-         if (var_idx < 0) cycle
-
-         var_ptr => var_registry%get_ptr(var_idx)
-         if (.not. associated(var_ptr)) cycle
-
-         status = nc_define_variable_in_file(file_ptr%backend_id, file_ptr%time_dimid, var_ptr)
-      end do
-
-      status = nc_end_definition(file_ptr%backend_id)
-
-      ! Determine how many levels to write
-      nlevels_to_write = min(file_ptr%restart_buffer_count, file_ptr%restart_nlevels)
-      
-      if (nlevels_to_write == 0) then
-         print *, "WARNING: No time levels stored for restart"
-         return
-      end if
-
-      ! Write each time level
-      ! Buffer is circular: find starting index for oldest data to write
-      if (file_ptr%restart_buffer_count >= file_ptr%restart_nlevels) then
-         ! Buffer is full, start from oldest
-         start_idx = mod(file_ptr%restart_buffer_idx, file_ptr%restart_nlevels) + 1
-      else
-         ! Buffer not full, start from 1
-         start_idx = 1
-      end if
-
-      file_ptr%time_index = 1
-      
-      do level = 1, nlevels_to_write
-         ! Get time value from circular buffer
-         j = mod(start_idx + level - 2, file_ptr%restart_nlevels) + 1
-         time_val = file_ptr%restart_times(j)
-
-         ! Write all variables at this time index
-         ! Note: This writes current model state - for true multi-level restart,
-         ! the model should provide access to previous time level arrays
-         do i = 1, file_ptr%num_variables
-            var_idx = var_registry%find(file_ptr%variables(i))
-            if (var_idx < 0) cycle
-
-            var_ptr => var_registry%get_ptr(var_idx)
-            if (.not. associated(var_ptr)) cycle
-
-            status = nc_write_variable_data(file_ptr%backend_id, file_ptr%time_index, var_ptr)
-         end do
-
-         ! Write time
-         status = nc_write_time(file_ptr%backend_id, file_ptr%time_varid, &
-                                file_ptr%time_index, time_val)
-         file_ptr%time_index = file_ptr%time_index + 1
-      end do
-
-      if (io_verbose >= IO_NORMAL) then
-         print *, "Written restart: ", trim(file_ptr%filename), " (", nlevels_to_write, " levels)"
-      end if
-
-   end subroutine write_restart_file
 
    !---------------------------------------------------------------------------
    !> @brief Flush file to disk if flush frequency is reached

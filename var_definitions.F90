@@ -225,19 +225,4 @@ contains
 
    end subroutine send_var_3d
 
-   !---------------------------------------------------------------------------
-   !> @brief Find variable index by name (kept for compatibility)
-   !---------------------------------------------------------------------------
-   function find_var_index(name) result(idx)
-      character(len=*), intent(in) :: name
-      integer :: idx, i
-      idx = -1
-      do i = 1, num_vars
-         if (trim(model_vars(i)%meta%name) == trim(name)) then
-            idx = i
-            return
-         end if
-      end do
-   end function find_var_index
-
 end module var_definitions
