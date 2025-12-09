@@ -18,6 +18,13 @@ module io_netcdf
    use grid_module, only: grid, axis, create_axis
    use io_definitions, only: io_variable
    use io_file_registry, only: avg_state
+#ifdef MPI
+   use mpi_param, only: mynode, is_master, mpi_io_mode, IO_MODE_PARALLEL, &
+                        LLm, MMm, iminmpi, jminmpi, Lm, Mm
+#endif
+#ifdef NC4PAR
+   use mpi
+#endif
    implicit none
    private
 
@@ -31,6 +38,10 @@ module io_netcdf
    public :: nc_write_time
    ! Direct write (no buffer) - for instant outputs
    public :: nc_write_direct_0d, nc_write_direct_1d, nc_write_direct_2d, nc_write_direct_3d
+#ifdef NC4PAR
+   public :: nc_set_parallel_access
+   public :: nc_set_all_parallel_access
+#endif
 
    ! Module state
    logical, private :: is_initialized = .false.
@@ -82,7 +93,14 @@ contains
       time_varid = -1
 
       ! Create NetCDF-4 file with compression support
+#ifdef NC4PAR
+      ! Parallel NetCDF-4: single shared file with MPI-IO
+      ncstatus = nf90_create(filename, &
+                             ior(nf90_clobber, ior(nf90_netcdf4, nf90_mpiio)), &
+                             ncid, comm=MPI_COMM_WORLD, info=MPI_INFO_NULL)
+#else
       ncstatus = nf90_create(filename, ior(nf90_clobber, nf90_netcdf4), ncid)
+#endif
       if (ncstatus /= nf90_noerr) then
          print *, "ERROR: Cannot create file: ", trim(filename)
          print *, "       NetCDF error: ", trim(nf90_strerror(ncstatus))
@@ -499,5 +517,59 @@ contains
       call nc_write_variable(ncid, varid, val, time_index)
       status = 0
    end function nc_write_direct_3d
+
+#ifdef NC4PAR
+   !---------------------------------------------------------------------------
+   !> @brief Set parallel access mode for a variable
+   !>
+   !> In parallel NetCDF-4 mode, this sets collective access for efficient
+   !> parallel I/O operations.
+   !>
+   !> @param[in] ncid   NetCDF file ID
+   !> @param[in] varid  Variable ID
+   !---------------------------------------------------------------------------
+   subroutine nc_set_parallel_access(ncid, varid)
+      integer, intent(in) :: ncid, varid
+      integer :: ncstatus
+      
+      ncstatus = nf90_var_par_access(ncid, varid, NF90_COLLECTIVE)
+      if (ncstatus /= NF90_NOERR) then
+         print *, "Warning: Failed to set parallel access for variable, varid=", varid
+      end if
+   end subroutine nc_set_parallel_access
+
+   !---------------------------------------------------------------------------
+   !> @brief Set all variables in a file to collective parallel access
+   !>
+   !> Must be called AFTER nc_end_definition (nf90_enddef)
+   !>
+   !> @param[in] ncid   NetCDF file ID
+   !---------------------------------------------------------------------------
+   subroutine nc_set_all_parallel_access(ncid)
+      integer, intent(in) :: ncid
+      
+      integer :: ncstatus, nvars, i
+      integer, allocatable :: varids(:)
+      
+      ! Get number of variables
+      ncstatus = nf90_inquire(ncid, nVariables=nvars)
+      if (ncstatus /= NF90_NOERR .or. nvars <= 0) return
+      
+      ! Get all variable IDs
+      allocate(varids(nvars))
+      ncstatus = nf90_inq_varids(ncid, nvars, varids)
+      if (ncstatus /= NF90_NOERR) then
+         deallocate(varids)
+         return
+      end if
+      
+      ! Set each variable to collective mode
+      do i = 1, nvars
+         ncstatus = nf90_var_par_access(ncid, varids(i), NF90_COLLECTIVE)
+      end do
+      
+      deallocate(varids)
+   end subroutine nc_set_all_parallel_access
+#endif
 
 end module io_netcdf

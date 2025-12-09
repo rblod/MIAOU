@@ -2,6 +2,57 @@
 
 All notable changes to the MIAOU I/O system are documented in this file.
 
+## [5.1.0] - 2025-12-04
+
+### ⚡ MPI Parallel I/O Support
+
+This release adds MPI support with per-process output files (CROCO-style).
+
+### Added
+
+- **MPI domain decomposition**: 2D process grid (NP_XI × NP_ETA)
+- **Per-process output files**: `ocean_his.0000.nc`, `ocean_his.0001.nc`, ...
+- **mpi_param.F90**: MPI parameters and decomposition variables
+- **mpi_setup.F90**: MPI initialization (CROCO-style)
+- **`add_mpi_suffix()`**: Adds `.NNNN.` suffix to filenames
+- **`generate_filename_mpi()`**: Generate filename with MPI rank
+
+### Changed
+
+- **Makefile**: Single Makefile for both serial and MPI builds
+  - `make` → Serial build
+  - `make mpi` → MPI build with `-DMPI`
+- **main_test_output.F90**: Unified with `#ifdef MPI` blocks
+- **ocean_var.F90**: Uses mpi_param dimensions in MPI mode
+- **io_manager.F90**: Adds MPI suffix to filenames in MPI mode
+
+### Usage
+
+```bash
+# Serial
+make
+./test_output.exe
+
+# MPI (4 processes)
+make mpi
+mpirun -np 4 ./test_output.exe
+
+# Output files
+ocean_hourly_3600s.0000.nc  # Process 0
+ocean_hourly_3600s.0001.nc  # Process 1
+ocean_hourly_3600s.0002.nc  # Process 2
+ocean_hourly_3600s.0003.nc  # Process 3
+```
+
+### Post-processing
+
+Use `ncjoin` (from CROCO tools) to assemble files:
+```bash
+ncjoin ocean_hourly_3600s.????.nc -o ocean_hourly_3600s.nc
+```
+
+---
+
 ## [5.0.0] - 2025-12-04
 
 ### ⚡ Major Release: Zero-Copy Architecture

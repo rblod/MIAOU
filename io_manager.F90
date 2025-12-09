@@ -26,13 +26,19 @@ module io_manager
                         get_calendar, file_registry
    use io_file_registry, only: output_file_def, output_file_registry, avg_state, &
                                OP_INSTANT, OP_AVERAGE, OP_MIN, OP_MAX, OP_ACCUMULATE
-   use io_naming, only: generate_filename
+   use io_naming, only: generate_filename, add_mpi_suffix
    use io_netcdf, only: nc_initialize, nc_finalize, nc_create_file, &
                         nc_write_variable_data, nc_write_time, &
                         nc_close_file, nc_define_variable_in_file, &
                         nc_end_definition, nc_write_avg_data, &
                         nc_write_direct_0d, nc_write_direct_1d, &
                         nc_write_direct_2d, nc_write_direct_3d
+#ifdef MPI
+   use mpi_param, only: mynode, is_master
+#endif
+#ifdef NC4PAR
+   use io_netcdf, only: nc_set_parallel_access, nc_set_all_parallel_access
+#endif
 
    implicit none
    private
@@ -196,6 +202,9 @@ contains
 
    !---------------------------------------------------------------------------
    !> @brief Create all output files
+   !>
+   !> In MPI mode (without NC4PAR): each process creates its own file with suffix _NNNN.nc
+   !> In NC4PAR mode: single shared file with parallel NetCDF-4
    !---------------------------------------------------------------------------
    subroutine create_all_files()
       integer :: file_idx, status
@@ -211,6 +220,14 @@ contains
 
          ! Generate filename
          filename = generate_filename(file_ptr%prefix, file_ptr%name, file_ptr%frequency)
+         
+#ifdef MPI
+#ifndef NC4PAR
+         ! Separate files mode: add MPI rank suffix
+         filename = add_mpi_suffix(filename, mynode)
+#endif
+#endif
+         
          file_ptr%filename = filename
 
          ! Create the file
@@ -230,8 +247,24 @@ contains
          ! End definition mode
          status = nc_end_definition(file_ptr%backend_id)
 
+#ifdef NC4PAR
+         ! Set all variables to collective parallel access mode
+         call nc_set_all_parallel_access(file_ptr%backend_id)
+#endif
+
          if (io_verbose >= IO_NORMAL) then
+#ifdef MPI
+            if (is_master) then
+#ifdef NC4PAR
+               print *, "Created parallel file: ", trim(filename)
+#else
+               print *, "Created files: ", trim(file_ptr%prefix)//"_"//trim(file_ptr%name)// &
+                        "_NNNN.nc (one per process)"
+#endif
+            end if
+#else
             print *, "Created file: ", trim(filename)
+#endif
          end if
       end do
    end subroutine create_all_files
@@ -445,6 +478,12 @@ contains
       end do
 
       status = nc_end_definition(file_ptr%backend_id)
+      
+#ifdef NC4PAR
+      ! Set all variables to collective parallel access mode
+      call nc_set_all_parallel_access(file_ptr%backend_id)
+#endif
+
       file_ptr%time_index = 1
 
    end subroutine recreate_restart_file

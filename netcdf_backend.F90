@@ -15,6 +15,9 @@ module netcdf_backend
    use netcdf_utils
    use grid_module
    use io_constants, only: io_compression_enabled, io_compression_level
+#ifdef NC4PAR
+   use mpi_param, only: iminmpi, jminmpi
+#endif
    implicit none
    private
 
@@ -42,6 +45,7 @@ contains
    !>
    !> This subroutine handles defining both scalar and n-dimensional variables,
    !> creating any dimensions that don't already exist in the file.
+   !> In NC4PAR mode, uses global dimensions (LLm, MMm) for xi/eta axes.
    !>
    !> @param[in]     ncid          NetCDF file ID
    !> @param[in]     ndims         Number of dimensions (0=scalar, 1=1D, etc.)
@@ -53,12 +57,15 @@ contains
    !> @param[out]    varid         ID of the newly defined variable
    subroutine nc_define_variable(ncid, ndims, var_name, var_long_name, var_units, &
                                  grid_axes, time_dimid, varid)
+#ifdef NC4PAR
+      use mpi_param, only: LLm, MMm
+#endif
       integer, intent(in) :: ncid, ndims, time_dimid
       character(len=*), intent(in) :: var_name, var_long_name, var_units
       type(axis), intent(inout) :: grid_axes(:)
       integer, intent(out) :: varid
 
-      integer :: i, ncerr, dim_id
+      integer :: i, ncerr, dim_id, dim_size
       integer, allocatable :: dim_ids(:)
 
       ! Define all spatial dimensions from the grid
@@ -67,14 +74,28 @@ contains
          ncerr = nf90_inq_dimid(ncid, trim(grid_axes(i)%name), dim_id)
 
          if (ncerr /= nf90_noerr) then
-            ! If not, create it
+            ! Determine dimension size
+#ifdef NC4PAR
+            ! Use global dimensions for xi/eta in parallel mode
+            if (index(grid_axes(i)%name, 'xi_') == 1) then
+               dim_size = LLm
+            else if (index(grid_axes(i)%name, 'eta_') == 1) then
+               dim_size = MMm
+            else
+               dim_size = grid_axes(i)%size
+            end if
+#else
+            dim_size = grid_axes(i)%size
+#endif
+
+            ! Create the dimension
             if (grid_axes(i)%is_unlimited) then
                call nc_check(nf90_def_dim(ncid, trim(grid_axes(i)%name), &
                                           nf90_unlimited, dim_id), &
                              "Create axis : "//trim(grid_axes(i)%name))
             else
                call nc_check(nf90_def_dim(ncid, trim(grid_axes(i)%name), &
-                                          grid_axes(i)%size, dim_id), &
+                                          dim_size, dim_id), &
                              "Create axis : "//trim(grid_axes(i)%name))
             end if
          end if
@@ -165,6 +186,8 @@ contains
 
    !> Write a 2D variable to a NetCDF file
    !>
+   !> In NC4PAR mode, uses global offsets (iminmpi, jminmpi) for parallel write
+   !>
    !> @param[in] ncid        NetCDF file ID
    !> @param[in] varid       Variable ID in the file
    !> @param[in] data        2D array data to write
@@ -174,13 +197,20 @@ contains
       real, intent(in) :: data(:, :)    ! Accepts any 2D array
       integer :: start(3), count(3)
 
+#ifdef NC4PAR
+      ! Parallel mode: write at global offset
+      start = [iminmpi, jminmpi, time_index]
+#else
       start = [1, 1, time_index]
+#endif
       count = [size(data, 1), size(data, 2), 1]
 
       call nc_check(nf90_put_var(ncid, varid, data, start=start, count=count))
    end subroutine nc_write_2d
 
    !> Write a 3D variable to a NetCDF file
+   !>
+   !> In NC4PAR mode, uses global offsets (iminmpi, jminmpi) for parallel write
    !>
    !> @param[in] ncid        NetCDF file ID
    !> @param[in] varid       Variable ID in the file
@@ -191,7 +221,12 @@ contains
       real, intent(in) :: data(:, :, :)    ! Accepts any 3D array
       integer :: start(4), count(4)
 
+#ifdef NC4PAR
+      ! Parallel mode: write at global offset
+      start = [iminmpi, jminmpi, 1, time_index]
+#else
       start = [1, 1, 1, time_index]
+#endif
       count = [size(data, 1), size(data, 2), size(data, 3), 1]
 
       call nc_check(nf90_put_var(ncid, varid, data, start=start, count=count))

@@ -9,6 +9,9 @@
 !> Default convention: {prefix}_{type}_{frequency}s.{extension}
 !> Example: ocean_his_3600s.nc
 !>
+!> With MPI: {prefix}_{type}_{frequency}s.{rank:04d}.{extension}
+!> Example: ocean_his_3600s.0003.nc
+!>
 !> @author Rachid Benshila
 !> @date 2025-04
 !===============================================================================
@@ -21,6 +24,8 @@ module io_naming
    public :: parse_filename
    public :: set_default_extension
    public :: get_default_extension
+   public :: generate_filename_mpi
+   public :: add_mpi_suffix
 
    !> Default file extension (can be changed by backend)
    character(len=16), private :: default_extension = "nc"
@@ -84,6 +89,81 @@ contains
          filename = trim(prefix)//'_'//trim(file_name)//'.'//trim(ext)
       end if
    end function generate_filename
+
+   !---------------------------------------------------------------------------
+   !> @brief Generate filename with MPI rank suffix
+   !>
+   !> Creates filename like: ocean_his_3600s.0003.nc
+   !>
+   !> @param[in] prefix     File prefix
+   !> @param[in] file_name  Logical file name
+   !> @param[in] freq       Output frequency
+   !> @param[in] mynode     MPI rank (0-based)
+   !> @param[in] extension  Optional extension
+   !> @return    Filename with MPI suffix
+   !---------------------------------------------------------------------------
+   function generate_filename_mpi(prefix, file_name, freq, mynode, extension) result(filename)
+      character(len=*), intent(in) :: prefix
+      character(len=*), intent(in) :: file_name
+      real, intent(in) :: freq
+      integer, intent(in) :: mynode
+      character(len=*), intent(in), optional :: extension
+      character(len=IO_PATH_LEN) :: filename
+
+      character(len=16) :: freq_str, rank_str
+      character(len=16) :: ext
+
+      ! Determine extension
+      if (present(extension)) then
+         ext = extension
+      else
+         ext = default_extension
+      end if
+
+      ! Format rank as 4-digit number
+      write(rank_str, '(I4.4)') mynode
+
+      ! Build filename with MPI suffix (underscore before rank)
+      if (freq > 0) then
+         write(freq_str, '(I0)') nint(freq)
+         filename = trim(prefix)//'_'//trim(file_name)//'_'//trim(freq_str)//'s_'// &
+                    trim(rank_str)//'.'//trim(ext)
+      else
+         filename = trim(prefix)//'_'//trim(file_name)//'_'//trim(rank_str)//'.'//trim(ext)
+      end if
+   end function generate_filename_mpi
+
+   !---------------------------------------------------------------------------
+   !> @brief Add MPI suffix to an existing filename
+   !>
+   !> Transforms: ocean_his.nc -> ocean_his_0003.nc
+   !>
+   !> @param[in] filename   Original filename
+   !> @param[in] mynode     MPI rank
+   !> @return    Filename with MPI suffix inserted before extension
+   !---------------------------------------------------------------------------
+   function add_mpi_suffix(filename, mynode) result(new_filename)
+      character(len=*), intent(in) :: filename
+      integer, intent(in) :: mynode
+      character(len=IO_PATH_LEN) :: new_filename
+
+      integer :: pos_dot
+      character(len=16) :: rank_str
+
+      ! Format rank as 4-digit number
+      write(rank_str, '(I4.4)') mynode
+
+      ! Find last dot (extension separator)
+      pos_dot = index(filename, '.', back=.true.)
+
+      if (pos_dot > 1) then
+         ! Insert rank before extension with underscore
+         new_filename = filename(1:pos_dot-1)//'_'//trim(rank_str)//filename(pos_dot:)
+      else
+         ! No extension, append rank with underscore
+         new_filename = trim(filename)//'_'//trim(rank_str)
+      end if
+   end function add_mpi_suffix
 
    !> Parse a filename to extract components
    !>
