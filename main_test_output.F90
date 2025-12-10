@@ -27,6 +27,9 @@ program main_test_output
    use mpi_param, only: mynode, is_master, Lm, Mm, N, ii, jj, NP_XI
    use mpi_setup, only: mpi_init_decomposition, mpi_finalize_all, mpi_barrier_all
 #endif
+#if defined(MPI) && !defined(PARALLEL_FILES) && !defined(NC4PAR)
+   use io_mpi_sync, only: io_wait_turn, io_pass_turn
+#endif
 
    implicit none
 
@@ -150,18 +153,15 @@ program main_test_output
    ! Create files before the loop (needed for averaging)
    call ensure_files_created()
 
-   do t = 1, nt
-      current_time = t * dt_sim
-
-      ! Update model fields (simple test patterns)
 #ifdef MPI
    call mpi_barrier_all()
-#ifdef NC4PAR
-   ! In NC4PAR mode, no phase shift - same values everywhere (like serial)
-   local_phase = 0.0
-#else
-   ! In MPI separate files mode, phase shift creates spatial variation
+#ifdef PARALLEL_FILES
+   ! In PARALLEL_FILES mode, phase shift creates spatial variation per file
    local_phase = real(ii + jj * NP_XI) * 0.5
+#else
+   ! In shared file modes (sequential or NC4PAR), no phase shift
+   ! All processes write same values - identical to serial output
+   local_phase = 0.0
 #endif
 #endif
 
@@ -190,7 +190,16 @@ program main_test_output
 #endif
       wind_speed = 5.0 + 3.0 * sin(current_time / 21600.0)  ! 6-hour wind cycle
 
-      ! Send all outputs (copy data to internal buffers)
+#if defined(MPI) && !defined(PARALLEL_FILES) && !defined(NC4PAR)
+      ! Check restart rotation BEFORE token passing (master recreates file if needed)
+      call check_restart_rotation(current_time)
+      
+      ! Sequential I/O: all writing must be inside token-protected section
+      call io_wait_turn()
+      call open_all_files_seq()
+#endif
+
+      ! Send all outputs (write data to files)
       call send_all_outputs(current_time)
 
       ! Write outputs (io_manager handles timing for each file)
@@ -199,6 +208,14 @@ program main_test_output
       else
          status = write_output(current_time)
       end if
+
+#if defined(MPI) && !defined(PARALLEL_FILES) && !defined(NC4PAR)
+      ! Sequential I/O: close files and pass turn
+      call close_all_files_seq()
+      call io_pass_turn()
+      ! Synchronize restart time indices after all processes have written
+      call sync_restart_time_indices()
+#endif
 
 #ifdef MPI
       call mpi_barrier_all()
@@ -243,6 +260,7 @@ program main_test_output
       print *, "Test completed successfully!"
       print *, ""
 #ifdef MPI
+#ifdef PARALLEL_FILES
       print *, "Output files created (one per process):"
       print *, "  - ocean_hourly_3600s_NNNN.nc     (instantaneous, hourly)"
       print *, "  - ocean_6hourly_21600s_NNNN.nc   (instantaneous, 6-hourly)"
@@ -250,6 +268,19 @@ program main_test_output
       print *, "  - ocean_restart_3600s_NNNN.nc    (restart)"
       print *, ""
       print *, "Use ncjoin to assemble: ncjoin ocean_hourly_3600s_????.nc"
+#elif defined(NC4PAR)
+      print *, "Output files created (parallel NetCDF-4):"
+      print *, "  - ocean_hourly_3600s.nc     (instantaneous, hourly)"
+      print *, "  - ocean_6hourly_21600s.nc   (instantaneous, 6-hourly)"
+      print *, "  - ocean_daily_avg_86400s.nc (daily averages)"
+      print *, "  - ocean_restart_3600s.nc    (restart)"
+#else
+      print *, "Output files created (sequential I/O):"
+      print *, "  - ocean_hourly_3600s.nc     (instantaneous, hourly)"
+      print *, "  - ocean_6hourly_21600s.nc   (instantaneous, 6-hourly)"
+      print *, "  - ocean_daily_avg_86400s.nc (daily averages)"
+      print *, "  - ocean_restart_3600s.nc    (restart)"
+#endif
 #else
       print *, "Output files created:"
       print *, "  - ocean_hourly_3600s.nc     (instantaneous, hourly)"

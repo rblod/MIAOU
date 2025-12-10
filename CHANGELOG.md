@@ -1,174 +1,122 @@
 # MIAOU Changelog
 
-All notable changes to the MIAOU I/O system are documented in this file.
+All notable changes to MIAOU are documented in this file.
 
-## [5.1.0] - 2025-12-04
-
-### ⚡ MPI Parallel I/O Support
-
-This release adds MPI support with per-process output files (CROCO-style).
+## [5.2.0] - 2025-12
 
 ### Added
-
-- **MPI domain decomposition**: 2D process grid (NP_XI × NP_ETA)
-- **Per-process output files**: `ocean_his.0000.nc`, `ocean_his.0001.nc`, ...
-- **mpi_param.F90**: MPI parameters and decomposition variables
-- **mpi_setup.F90**: MPI initialization (CROCO-style)
-- **`add_mpi_suffix()`**: Adds `.NNNN.` suffix to filenames
-- **`generate_filename_mpi()`**: Generate filename with MPI rank
+- **Sequential I/O mode** (new default for MPI): Token-passing synchronization allows all processes to write to a single file without requiring parallel NetCDF. Inspired by CROCO's approach.
+- **New module `io_mpi_sync.F90`**: Implements token-passing (`io_wait_turn`, `io_pass_turn`) for sequential I/O
+- **`nc_open_file` function**: Allows non-master processes to open files created by master
+- **Comprehensive test script `run_all_tests.sh`**: Tests all I/O modes (serial, MPI sequential, MPI parallel files, NC4PAR)
+- **PARALLEL_FILES CPP key**: Explicitly enables one-file-per-process mode
 
 ### Changed
+- **Default MPI I/O mode**: Changed from parallel files to sequential I/O (single file)
+- **Build targets**:
+  - `make mpi` now builds sequential I/O (single file)
+  - `make mpi_pf` builds with PARALLEL_FILES (one file per process)
+  - `make nc4par` builds with parallel NetCDF-4
+- **File naming**: MPI suffix changed from `.NNNN.nc` to `_NNNN.nc` for better compatibility
+- **Domain size**: Unified at 40×40×5 for all tests (serial and MPI)
 
-- **Makefile**: Single Makefile for both serial and MPI builds
-  - `make` → Serial build
-  - `make mpi` → MPI build with `-DMPI`
-- **main_test_output.F90**: Unified with `#ifdef MPI` blocks
-- **ocean_var.F90**: Uses mpi_param dimensions in MPI mode
-- **io_manager.F90**: Adds MPI suffix to filenames in MPI mode
+### Known Limitations
+- None currently identified for standard usage patterns
 
-### Usage
+### Fixed
+- **Restart file rotation in MPI sequential mode**: Added `check_restart_rotation()` to synchronize rotation across all MPI processes before token passing begins. This ensures all processes have consistent `time_index` values, fixing incomplete records after file rotation.
+- NC4PAR mode now correctly sets all variables to collective access mode after file creation
+- Phase shift removed in NC4PAR mode to ensure verification consistency
 
-```bash
-# Serial
-make
-./test_output.exe
-
-# MPI (4 processes)
-make mpi
-mpirun -np 4 ./test_output.exe
-
-# Output files
-ocean_hourly_3600s.0000.nc  # Process 0
-ocean_hourly_3600s.0001.nc  # Process 1
-ocean_hourly_3600s.0002.nc  # Process 2
-ocean_hourly_3600s.0003.nc  # Process 3
-```
-
-### Post-processing
-
-Use `ncjoin` (from CROCO tools) to assemble files:
-```bash
-ncjoin ocean_hourly_3600s.????.nc -o ocean_hourly_3600s.nc
-```
-
----
-
-## [5.0.0] - 2025-12-04
-
-### ⚡ Major Release: Zero-Copy Architecture
-
-This release introduces a fundamental redesign of the I/O system to eliminate
-unnecessary memory duplication for instantaneous outputs.
+## [5.1.0] - 2025-12
 
 ### Added
-
-- **Zero-copy writes for INSTANT files**: Data is written directly from model
-  arrays to NetCDF without intermediate buffers
-- **Restart flag in output_vars.inc**: 7th argument `is_restart` controls
-  whether a variable needs buffering for restart files
-- **Incremental restart with rotation**: Restart files are written
-  incrementally and rotate after N time levels
-- **`ensure_files_created()` API**: Explicit file creation before time loop
-- **`needs_restart_buffer()` function**: Fast local lookup for restart status
-- **Direct write functions**: `nc_write_direct_0d/1d/2d/3d()` in io_netcdf.F90
+- **MPI parallel I/O support** with CROCO-style 2D domain decomposition
+- **New modules**:
+  - `mpi_param.F90`: Domain decomposition parameters (NP_XI, NP_ETA, NNODES, LLm, MMm)
+  - `mpi_setup.F90`: MPI initialization with neighbor computation
+- **Per-process output files**: `ocean_hourly_3600s_0000.nc`, `_0001.nc`, etc.
+- **NC4PAR support**: Parallel NetCDF-4 with HDF5 parallel I/O
+- **Unified Makefile**: Single Makefile for serial and MPI builds
+- Functions: `add_mpi_suffix`, `generate_filename_mpi`, `nc_set_parallel_access`
 
 ### Changed
+- `io_manager.F90`: Conditional filename suffix based on I/O mode
+- `netcdf_backend.F90`: Write with global offsets in NC4PAR mode
+- `io_netcdf.F90`: File creation with `NF90_MPIIO` in NC4PAR mode
 
-- **`send_var()` signature**: Now includes `current_time` parameter
-- **Buffer allocation strategy**: Buffers only allocated for:
-  - Variables in AVERAGE files (for accumulation)
-  - Variables marked `is_restart=.true.` (for restart)
-- **Restart file behavior**: Now writes incrementally like INSTANT files,
-  with automatic rotation when reaching N levels
-- **`output_vars.inc` format**: Added 7th argument for restart flag
-
-### Removed
-
-- Automatic buffer allocation for all variables
-- `is_restart_variable()` public function (replaced by local lookup)
-- Old `write_restart_file()` bulk write approach
-
-### Performance
-
-Memory savings for typical CROCO configuration (1000×800×50, 10 3D variables):
-
-| Configuration | v4.0.0 | v5.0.0 | Savings |
-|--------------|--------|--------|---------|
-| All instant | 1.6 GB | 0 GB | 100% |
-| Mixed instant/avg | 1.6 GB | 0.8 GB | 50% |
-
-### Migration Guide
-
-1. Update `output_vars.inc` to include restart flag:
-   ```fortran
-   ! Before (v4.0.0)
-   OUTVAR("zeta", "SSH", "m", grd_rho, 2, zeta)
-   
-   ! After (v5.0.0)
-   OUTVAR("zeta", "SSH", "m", grd_rho, 2, zeta, .true.)
-   ```
-
-2. Add `ensure_files_created()` before time loop:
-   ```fortran
-   call ensure_files_created()
-   do t = 1, nt
-      ...
-   end do
-   ```
-
-3. For restart with multiple time levels, use `freq > 0`:
-   ```fortran
-   file_freq(4) = 3600.0    ! Write every hour
-   file_restart_nlevels(4) = 2  ! Keep last 2 records
-   ```
-
----
-
-## [4.0.0] - 2025-12-03
+## [5.0.0] - 2025-04
 
 ### Added
-
-- **Single-file variable definition**: All variables defined in `output_vars.inc`
-- **Preprocessor macro approach**: `OUTVAR()` macro for clean syntax
-- **Internal buffers**: Variables don't need `target` attribute
-- **Variable groups**: `@groupname` syntax in namelist
+- **Zero-copy architecture**: Instant outputs write directly without buffer allocation
+- **Restart file support**: Incremental restart with configurable rotation
+- **Double buffering** for restart: Maintains N most recent records
+- **Restart-specific variables**: `is_restart` flag in variable definitions
 
 ### Changed
+- Memory optimization: 0 GB for instant-only outputs (vs 1.6 GB in v4.0.0)
+- Lazy buffer allocation: Buffers only allocated when needed for averaging
 
-- Unified API through `send_all_outputs()` and `write_output()`
-- Removed requirement for `target` attribute on model variables
-
-### Known Issues
-
-- All variables buffered regardless of output type (fixed in v5.0.0)
-
----
-
-## [3.0.0] - 2025-12-02
+## [4.0.0] - 2025-04
 
 ### Added
+- **File-centric architecture**: Complete redesign around output files
+- **Variable groups**: `@surface`, `@prognostic`, etc. for easy management
+- **Multiple operations per file**: instant, average, min, max, accumulate
+- **Namelist configuration**: `output_config.nml` with three sections
+- **NetCDF-4 compression**: Configurable via namelist
 
-- File-centric configuration via namelist
-- Support for INSTANT, AVERAGE, and RESTART operations
-- Compression support (NetCDF-4)
-- CF-1.8 compliant output
+### Changed
+- Configuration moved from code to namelist
+- Variables can appear in multiple files with different operations
+- Averaging state tracked per-file, not per-variable
 
----
-
-## [2.0.0] - 2025-12-01
-
-### Added
-
-- Grid-based variable registration
-- Automatic dimension handling
-- Time coordinate management
-
----
-
-## [1.0.0] - 2025-11-30
+## [3.0.0] - 2025-04
 
 ### Added
-
-- Initial release
+- Initial modular I/O system
 - Basic NetCDF output support
-- Manual variable registration
+- Variable registry
+- Grid module with axis support
+
+---
+
+## CPP Keys Reference
+
+| Version | Key | Description |
+|---------|-----|-------------|
+| 5.2.0+ | `MPI` | Enable MPI support |
+| 5.2.0+ | `PARALLEL_FILES` | One file per process (with MPI) |
+| 5.1.0+ | `NC4PAR` | Parallel NetCDF-4 I/O (requires parallel HDF5) |
+
+## Migration Guide
+
+### From 5.1.0 to 5.2.0
+
+**Build commands changed:**
+```bash
+# Old (5.1.0)
+make mpi      # Built with separate files per process
+
+# New (5.2.0)
+make mpi      # Sequential I/O (single file) - NEW DEFAULT
+make mpi_pf   # Separate files per process (old behavior)
+make nc4par   # Parallel NetCDF-4 (unchanged)
+```
+
+**No code changes required** if using the MIAOU API (`write_output`, `send_output`).
+
+### From 5.0.0 to 5.1.0
+
+Add MPI modules to your Makefile:
+```makefile
+SRCS_MPI = mpi_param.F90 mpi_setup.F90
+```
+
+Call MPI initialization before I/O:
+```fortran
+#ifdef MPI
+call mpi_init_decomposition()
+#endif
+call initialize_io('output_config.nml')
+```

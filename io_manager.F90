@@ -27,14 +27,17 @@ module io_manager
    use io_file_registry, only: output_file_def, output_file_registry, avg_state, &
                                OP_INSTANT, OP_AVERAGE, OP_MIN, OP_MAX, OP_ACCUMULATE
    use io_naming, only: generate_filename, add_mpi_suffix
-   use io_netcdf, only: nc_initialize, nc_finalize, nc_create_file, &
+   use io_netcdf, only: nc_initialize, nc_finalize, nc_create_file, nc_open_file, &
                         nc_write_variable_data, nc_write_time, &
                         nc_close_file, nc_define_variable_in_file, &
                         nc_end_definition, nc_write_avg_data, &
                         nc_write_direct_0d, nc_write_direct_1d, &
                         nc_write_direct_2d, nc_write_direct_3d
 #ifdef MPI
-   use mpi_param, only: mynode, is_master
+   use mpi_param, only: mynode, is_master, NNODES
+#endif
+#if defined(MPI) && !defined(PARALLEL_FILES) && !defined(NC4PAR)
+   use io_mpi_sync, only: io_wait_turn, io_pass_turn
 #endif
 #ifdef NC4PAR
    use io_netcdf, only: nc_set_parallel_access, nc_set_all_parallel_access
@@ -50,6 +53,10 @@ module io_manager
    public :: get_variable_ptr
    public :: process_var_instant, process_var_average
    public :: ensure_files_created
+#if defined(MPI) && !defined(PARALLEL_FILES) && !defined(NC4PAR)
+   public :: open_all_files_seq, close_all_files_seq
+   public :: sync_restart_time_indices, check_restart_rotation
+#endif
 
    ! Variable registry
    type(io_var_registry), public, target :: var_registry
@@ -178,6 +185,9 @@ contains
          files_created = .true.
       end if
 
+      ! Note: In sequential I/O mode, token passing and file open/close
+      ! must be done by the CALLER around both send_all_outputs() and write_output()
+
       ! Process each file
       do file_idx = 1, file_registry%size()
          file_ptr => file_registry%get_ptr(file_idx)
@@ -188,78 +198,247 @@ contains
 
    end function write_output
 
+#if defined(MPI) && !defined(PARALLEL_FILES) && !defined(NC4PAR)
+   !---------------------------------------------------------------------------
+   !> @brief Open all files for sequential I/O
+   !>
+   !> Called by non-master processes to open files created by master.
+   !> Also called by master after passing token back around.
+   !---------------------------------------------------------------------------
+   subroutine open_all_files_seq()
+      integer :: file_idx, status
+      type(output_file_def), pointer :: file_ptr
+
+      do file_idx = 1, file_registry%size()
+         file_ptr => file_registry%get_ptr(file_idx)
+         if (.not. associated(file_ptr)) cycle
+         
+         ! Open file if not already open
+         if (file_ptr%backend_id < 0) then
+            status = nc_open_file(file_ptr%filename, file_ptr%backend_id, &
+                                  file_ptr%time_dimid, file_ptr%time_varid)
+            if (status /= 0) then
+               print *, "ERROR: Cannot open file for sequential I/O: ", &
+                        trim(file_ptr%filename)
+            end if
+         end if
+      end do
+   end subroutine open_all_files_seq
+
+   !---------------------------------------------------------------------------
+   !> @brief Close all files for sequential I/O
+   !>
+   !> Must close files after writing so next process can open them.
+   !---------------------------------------------------------------------------
+   subroutine close_all_files_seq()
+      integer :: file_idx, status
+      type(output_file_def), pointer :: file_ptr
+
+      do file_idx = 1, file_registry%size()
+         file_ptr => file_registry%get_ptr(file_idx)
+         if (.not. associated(file_ptr)) cycle
+         
+         ! Close file if open
+         if (file_ptr%backend_id > 0) then
+            status = nc_close_file(file_ptr%backend_id)
+            file_ptr%backend_id = -1  ! Mark as closed
+         end if
+      end do
+   end subroutine close_all_files_seq
+
+   !---------------------------------------------------------------------------
+   !> @brief Check and handle restart rotation before token passing
+   !>
+   !> In MPI sequential mode, rotation must happen BEFORE token passing starts.
+   !> Master checks if rotation needed, performs it, then broadcasts to all.
+   !> All processes update their time_index before writing.
+   !---------------------------------------------------------------------------
+   subroutine check_restart_rotation(current_time)
+      use mpi
+      real, intent(in) :: current_time
+      
+      integer :: file_idx, ierr, status
+      integer :: needs_rotation, new_time_index
+      type(output_file_def), pointer :: file_ptr
+      logical :: is_checkpoint_time
+
+      do file_idx = 1, file_registry%size()
+         file_ptr => file_registry%get_ptr(file_idx)
+         if (.not. associated(file_ptr)) cycle
+         
+         ! Only process restart files
+         if (file_ptr%operation /= OP_INSTANT) cycle
+         if (file_ptr%restart_nlevels <= 0) cycle
+         
+         ! Check if this is a checkpoint time
+         if (file_ptr%frequency < 0.0) then
+            is_checkpoint_time = .false.  ! Final only - handled separately
+         else
+            is_checkpoint_time = is_output_time(current_time, file_ptr%frequency)
+         end if
+         
+         if (.not. is_checkpoint_time) cycle
+         
+         ! Master checks if rotation needed and performs it
+         needs_rotation = 0
+         if (is_master) then
+            if (file_ptr%time_index > file_ptr%restart_nlevels) then
+               needs_rotation = 1
+               ! Close and recreate file
+               if (file_ptr%backend_id > 0) then
+                  status = nc_close_file(file_ptr%backend_id)
+                  file_ptr%backend_id = -1
+               end if
+               call recreate_restart_file(file_ptr)
+               ! time_index is now 1 after recreate
+            end if
+            new_time_index = file_ptr%time_index
+         end if
+         
+         ! Broadcast rotation status and new time_index
+         call MPI_Bcast(needs_rotation, 1, MPI_INTEGER, 0, MPI_COMM_WORLD, ierr)
+         call MPI_Bcast(new_time_index, 1, MPI_INTEGER, 0, MPI_COMM_WORLD, ierr)
+         
+         ! All non-master processes update their time_index
+         if (.not. is_master) then
+            file_ptr%time_index = new_time_index
+         end if
+         
+         ! Barrier to ensure file is ready before others open it
+         call MPI_Barrier(MPI_COMM_WORLD, ierr)
+      end do
+   end subroutine check_restart_rotation
+
+   !---------------------------------------------------------------------------
+   !> @brief Synchronize restart file time indices after writing
+   !>
+   !> After all processes have written, sync time_index for next iteration.
+   !---------------------------------------------------------------------------
+   subroutine sync_restart_time_indices()
+      use mpi
+      integer :: file_idx, ierr
+      type(output_file_def), pointer :: file_ptr
+
+      do file_idx = 1, file_registry%size()
+         file_ptr => file_registry%get_ptr(file_idx)
+         if (.not. associated(file_ptr)) cycle
+         
+         ! Only sync restart files
+         if (file_ptr%operation /= OP_INSTANT) cycle
+         if (file_ptr%restart_nlevels <= 0) cycle
+         
+         ! Master broadcasts its time_index to all others
+         call MPI_Bcast(file_ptr%time_index, 1, MPI_INTEGER, 0, MPI_COMM_WORLD, ierr)
+      end do
+   end subroutine sync_restart_time_indices
+#endif
+
    !---------------------------------------------------------------------------
    !> @brief Ensure all output files are created
    !>
    !> Call this before send_all_outputs to ensure files exist.
+   !> In sequential I/O mode, waits for master to finish creating files.
    !---------------------------------------------------------------------------
    subroutine ensure_files_created()
+#if defined(MPI) && !defined(PARALLEL_FILES) && !defined(NC4PAR)
+      use mpi
+      integer :: ierr
+#endif
+
       if (.not. files_created) then
          call create_all_files()
          files_created = .true.
       end if
+
+#if defined(MPI) && !defined(PARALLEL_FILES) && !defined(NC4PAR)
+      ! Wait for master to finish creating files before continuing
+      call MPI_Barrier(MPI_COMM_WORLD, ierr)
+#endif
    end subroutine ensure_files_created
 
    !---------------------------------------------------------------------------
    !> @brief Create all output files
    !>
-   !> In MPI mode (without NC4PAR): each process creates its own file with suffix _NNNN.nc
-   !> In NC4PAR mode: single shared file with parallel NetCDF-4
+   !> MPI I/O modes:
+   !> - Sequential (default): master creates single file, others open later
+   !> - PARALLEL_FILES: each process creates its own file with _NNNN suffix
+   !> - NC4PAR: parallel NetCDF-4, single shared file
    !---------------------------------------------------------------------------
    subroutine create_all_files()
       integer :: file_idx, status
       type(output_file_def), pointer :: file_ptr
       character(len=IO_PATH_LEN) :: filename
+      logical :: do_create
 
-      ! First validate configuration
+      ! First validate configuration (all processes)
       call validate_config()
 
       do file_idx = 1, file_registry%size()
          file_ptr => file_registry%get_ptr(file_idx)
          if (.not. associated(file_ptr)) cycle
 
-         ! Generate filename
+         ! Generate filename (all processes do this)
          filename = generate_filename(file_ptr%prefix, file_ptr%name, file_ptr%frequency)
          
-#ifdef MPI
-#ifndef NC4PAR
+#if defined(MPI) && defined(PARALLEL_FILES)
          ! Separate files mode: add MPI rank suffix
          filename = add_mpi_suffix(filename, mynode)
 #endif
-#endif
          
+         ! Store filename on all processes
          file_ptr%filename = filename
 
-         ! Create the file
-         status = nc_create_file(filename, file_ptr%name, file_ptr%frequency, &
-                                 get_time_units(), get_calendar(), &
-                                 file_ptr%backend_id, file_ptr%time_dimid, &
-                                 file_ptr%time_varid)
+#if defined(MPI) && !defined(PARALLEL_FILES) && !defined(NC4PAR)
+         ! Sequential I/O: only master creates files
+         do_create = is_master
+#else
+         ! Other modes: all processes create/participate
+         do_create = .true.
+#endif
 
-         if (status /= 0) then
-            print *, "ERROR: Failed to create file: ", trim(filename)
-            cycle
-         end if
+         if (do_create) then
+            ! Create the file
+            status = nc_create_file(filename, file_ptr%name, file_ptr%frequency, &
+                                    get_time_units(), get_calendar(), &
+                                    file_ptr%backend_id, file_ptr%time_dimid, &
+                                    file_ptr%time_varid)
 
-         ! Define variables in file
-         call define_variables_in_file(file_ptr)
+            if (status /= 0) then
+               print *, "ERROR: Failed to create file: ", trim(filename)
+               cycle
+            end if
 
-         ! End definition mode
-         status = nc_end_definition(file_ptr%backend_id)
+            ! Define variables in file
+            call define_variables_in_file(file_ptr)
+
+            ! End definition mode
+            status = nc_end_definition(file_ptr%backend_id)
 
 #ifdef NC4PAR
-         ! Set all variables to collective parallel access mode
-         call nc_set_all_parallel_access(file_ptr%backend_id)
+            ! Set all variables to collective parallel access mode
+            call nc_set_all_parallel_access(file_ptr%backend_id)
 #endif
+
+#if defined(MPI) && !defined(PARALLEL_FILES) && !defined(NC4PAR)
+            ! Sequential I/O: master closes file after creation
+            status = nc_close_file(file_ptr%backend_id)
+            file_ptr%backend_id = -1  ! Mark as closed
+#endif
+         else
+            ! Non-master in sequential mode: mark file as not yet opened
+            file_ptr%backend_id = -1
+         end if
 
          if (io_verbose >= IO_NORMAL) then
 #ifdef MPI
             if (is_master) then
 #ifdef NC4PAR
                print *, "Created parallel file: ", trim(filename)
-#else
+#elif defined(PARALLEL_FILES)
                print *, "Created files: ", trim(file_ptr%prefix)//"_"//trim(file_ptr%name)// &
                         "_NNNN.nc (one per process)"
+#else
+               print *, "Created file (sequential I/O): ", trim(filename)
 #endif
             end if
 #else
@@ -433,6 +612,9 @@ contains
       
       if (is_checkpoint_time) then
          ! Check if we need to rotate (reset to beginning)
+         ! In MPI sequential mode, rotation is handled by check_restart_rotation()
+         ! before token passing starts, so we skip it here
+#if !defined(MPI) || defined(PARALLEL_FILES) || defined(NC4PAR)
          if (file_ptr%time_index > file_ptr%restart_nlevels) then
             ! Reopen file in overwrite mode
             if (file_ptr%backend_id > 0) then
@@ -440,6 +622,7 @@ contains
             end if
             call recreate_restart_file(file_ptr)
          end if
+#endif
          
          ! Write current data directly (like instant)
          call write_restart_record(file_ptr, current_time)

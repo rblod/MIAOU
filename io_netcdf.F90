@@ -19,7 +19,7 @@ module io_netcdf
    use io_definitions, only: io_variable
    use io_file_registry, only: avg_state
 #ifdef MPI
-   use mpi_param, only: mynode, is_master, mpi_io_mode, IO_MODE_PARALLEL, &
+   use mpi_param, only: mynode, is_master, NNODES, &
                         LLm, MMm, iminmpi, jminmpi, Lm, Mm
 #endif
 #ifdef NC4PAR
@@ -30,7 +30,7 @@ module io_netcdf
 
    ! Public procedures
    public :: nc_initialize, nc_finalize
-   public :: nc_create_file, nc_close_file
+   public :: nc_create_file, nc_open_file, nc_close_file
    public :: nc_define_variable_in_file
    public :: nc_end_definition
    public :: nc_write_variable_data
@@ -147,6 +147,57 @@ contains
 
       status = 0
    end function nc_create_file
+
+   !---------------------------------------------------------------------------
+   !> @brief Open an existing NetCDF file for writing
+   !>
+   !> Used in sequential I/O mode where non-master processes need to open
+   !> a file that was created by the master process.
+   !>
+   !> @param[in]  filename     Path to the file
+   !> @param[out] ncid         NetCDF file ID
+   !> @param[out] time_dimid   Time dimension ID
+   !> @param[out] time_varid   Time variable ID
+   !> @return     Status (0 = success)
+   !---------------------------------------------------------------------------
+   function nc_open_file(filename, ncid, time_dimid, time_varid) result(status)
+      character(len=*), intent(in) :: filename
+      integer, intent(out) :: ncid, time_dimid, time_varid
+      integer :: status
+
+      integer :: ncstatus
+
+      status = -1
+      ncid = -1
+      time_dimid = -1
+      time_varid = -1
+
+      ! Open existing file for writing
+      ncstatus = nf90_open(filename, nf90_write, ncid)
+      if (ncstatus /= nf90_noerr) then
+         print *, "ERROR: Cannot open file: ", trim(filename)
+         print *, "       NetCDF error: ", trim(nf90_strerror(ncstatus))
+         return
+      end if
+
+      ! Get time dimension ID
+      ncstatus = nf90_inq_dimid(ncid, "time", time_dimid)
+      if (ncstatus /= nf90_noerr) then
+         print *, "ERROR: Cannot find time dimension in: ", trim(filename)
+         ncstatus = nf90_close(ncid)
+         ncid = -1
+         return
+      end if
+
+      ! Get time variable ID
+      ncstatus = nf90_inq_varid(ncid, "time", time_varid)
+      if (ncstatus /= nf90_noerr) then
+         print *, "WARNING: Cannot find time variable in: ", trim(filename)
+         time_varid = -1
+      end if
+
+      status = 0
+   end function nc_open_file
 
    !---------------------------------------------------------------------------
    !> @brief Close a NetCDF file

@@ -71,8 +71,8 @@ def color_print(message, color):
 
 
 # Simulation parameters (must match main_test_output.F90)
-NX = 10
-NY = 8
+NX = 40
+NY = 40
 NZ = 5
 NT = 30          # 30 hours of simulation
 DT = 3600.0      # 1 hour timestep

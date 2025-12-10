@@ -1,557 +1,201 @@
-# MIAOU: Modular I/O Architecture for Ocean and Unified models
+# MIAOU - Modular I/O Architecture for Ocean and Unified models
 
-## Overview
+**Version 5.2.0**
 
-MIAOU is a flexible, modular input/output system designed for oceanographic models. It provides a clean separation of concerns between variable definition, output configuration, and backend implementation. 
-
-**Key design principle**: File-centric configuration where output files define which variables they contain, rather than variables defining where they go.
+MIAOU is a modern, modular I/O system designed for ocean and climate models. It provides a flexible, file-centric architecture for managing model outputs with support for multiple output frequencies, averaging operations, and MPI parallelization.
 
 ## Key Features
 
-- **File-Centric Configuration**: Define output files with their variables, frequencies, and operations
-- **MPI Parallel I/O**: Per-process output files with 2D domain decomposition
-- **Variable Groups**: Reusable groups of variables (`@surface`, `@prognostic`)
-- **Multiple Operations**: Instantaneous, average, min, max, accumulate
-- **Restart Support**: Multi-level time restart files with final-only option
-- **NetCDF-4 Compression**: Configurable deflate compression
-- **CF-Compliant**: Standard metadata attributes (standard_name, valid_range, coordinates)
-- **Validation**: Automatic check of configuration at initialization
-- **Flexible Dimensions**: Support for 0D (scalar) to 3D variables
-- **Verbosity Control**: Quiet, normal, or debug output levels
-- **Periodic Flush**: Protection against data loss during long simulations
+- **File-centric configuration**: Define output files with their own frequencies, variables, and operations
+- **Variable groups**: Organize variables into logical groups for easy management
+- **Multiple output operations**: Instant, average, min, max, accumulate
+- **Restart file support**: Incremental restart with rotation (N most recent records)
+- **NetCDF-4 compression**: Configurable compression for reduced file sizes
+- **Zero-copy architecture**: Memory-efficient instant outputs
+- **MPI Parallel I/O**: Three flexible modes for parallel output
+
+## MPI I/O Modes
+
+MIAOU supports three MPI I/O strategies:
+
+| Mode | Build Command | Output | Requirements |
+|------|---------------|--------|--------------|
+| **Sequential** (default) | `make mpi` | Single file | Any MPI + NetCDF |
+| **Parallel Files** | `make mpi_pf` | One file per process | Any MPI + NetCDF |
+| **Parallel NetCDF-4** | `make nc4par` | Single file (parallel writes) | NetCDF with parallel HDF5 |
+
+### Sequential I/O (Default)
+Processes write to a single file in turn using token-passing synchronization (like CROCO). This is the default mode, compatible with any NetCDF installation.
+
+### Parallel Files
+Each process writes its own file with a `_NNNN` suffix. Post-process with `ncjoin` to combine files.
+
+### Parallel NetCDF-4 (NC4PAR)
+All processes write simultaneously to a single file using HDF5 parallel I/O. Requires NetCDF built with `--enable-parallel4`.
 
 ## Quick Start
 
-### Building
-
+### Serial Build
 ```bash
-# Serial version
 make
+./test_output.exe
+```
 
-# MPI parallel version
+### MPI Build (Sequential I/O - Default)
+```bash
 make mpi
-```
-
-### Running
-
-```bash
-# Serial
-./test_output.exe
-
-# MPI with 4 processes (2×2 decomposition)
 mpirun -np 4 ./test_output.exe
+# Output: ocean_hourly_3600s.nc (single file)
 ```
 
-### MPI Output Files
-
-In MPI mode, each process writes its own file with a `.NNNN.` suffix:
-
-```
-ocean_hourly_3600s.0000.nc   # Process 0 (i=1:50, j=1:40)
-ocean_hourly_3600s.0001.nc   # Process 1 (i=51:100, j=1:40)
-ocean_hourly_3600s.0002.nc   # Process 2 (i=1:50, j=41:80)
-ocean_hourly_3600s.0003.nc   # Process 3 (i=51:100, j=41:80)
-```
-
-Use `ncjoin` from CROCO tools to reassemble:
+### MPI Build (Parallel Files)
 ```bash
-ncjoin ocean_hourly_3600s.????.nc -o ocean_hourly_3600s.nc
+make mpi_pf
+mpirun -np 4 ./test_output.exe
+# Output: ocean_hourly_3600s_0000.nc, ocean_hourly_3600s_0001.nc, ...
+ncjoin ocean_hourly_3600s_????.nc  # Combine files
 ```
 
-### Basic Configuration
+### MPI Build (Parallel NetCDF-4)
+```bash
+# Check support first:
+nc-config --has-parallel4  # Should return "yes"
+
+make nc4par
+mpirun -np 4 ./test_output.exe
+# Output: ocean_hourly_3600s.nc (single file, parallel writes)
+```
+
+## Running Tests
+
+A comprehensive test script is provided:
+
+```bash
+chmod +x run_all_tests.sh
+
+# Run all tests
+./run_all_tests.sh
+
+# Run specific tests
+./run_all_tests.sh serial      # Serial only
+./run_all_tests.sh mpi         # MPI sequential only
+./run_all_tests.sh mpi_pf      # MPI parallel files only
+./run_all_tests.sh nc4par      # NC4PAR only
+
+# Run multiple tests
+./run_all_tests.sh serial mpi  # Serial and MPI sequential
+```
+
+The script will:
+1. Build each mode
+2. Execute the test program
+3. Verify output files with `verify_output.py`
+4. Report pass/fail status
+
+## Configuration
+
+Output configuration is defined in `output_config.nml`:
 
 ```fortran
+&io_nml
+   output_prefix = 'ocean'
+   time_units = 'seconds since 2000-01-01'
+   calendar = 'gregorian'
+   compression_enabled = .true.
+   compression_level = 4
+/
+
+&io_groups_nml
+   groups(1) = '@surface: zeta, u, v'
+   groups(2) = '@thermo: temp, temp_profile'
+   groups(3) = '@prognostic: zeta, u, v, temp'
+/
+
 &io_files_nml
-   nml_output_prefix = "ocean"
-   
-   ! Define variable groups
-   group_name(1) = "surface"
-   group_vars(1) = "zeta,u,v"
-   
-   ! Define output files
-   file_name(1) = "hourly"
-   file_freq(1) = 3600.0
-   file_operation(1) = "instant"
-   file_vars(1) = "@surface"
+   files(1) = 'hourly:   freq=3600,  vars=@surface,wind_speed'
+   files(2) = '6hourly:  freq=21600, vars=zeta,temp'
+   files(3) = 'daily_avg: freq=86400, op=average, vars=@prognostic,temp_profile'
+   files(4) = 'restart:  freq=3600,  vars=@prognostic, restart=true, nlevels=2'
 /
 ```
 
 ## Architecture
 
 ```
-┌─────────────────┐     ┌─────────────────┐     ┌─────────────────┐
-│   io_manager    │────▶│   io_config     │────▶│   io_netcdf     │
-│  (orchestration)│     │ (configuration) │     │    (backend)    │
-└─────────────────┘     └─────────────────┘     └─────────────────┘
-         │                      │                        │
-         ▼                      ▼                        ▼
-┌─────────────────┐     ┌─────────────────┐     ┌─────────────────┐
-│  io_definitions │     │io_file_registry │     │ netcdf_backend  │
-│   (var types)   │     │  (file types)   │     │  (low-level)    │
-└─────────────────┘     └─────────────────┘     └─────────────────┘
+┌─────────────────┐     ┌──────────────────┐
+│  Model Code     │────▶│   io_manager     │
+│ (send_output)   │     │ (orchestration)  │
+└─────────────────┘     └────────┬─────────┘
+                                 │
+        ┌────────────────────────┼────────────────────────┐
+        ▼                        ▼                        ▼
+┌───────────────┐      ┌─────────────────┐      ┌─────────────────┐
+│  io_config    │      │ io_file_registry │      │   io_netcdf     │
+│ (namelist)    │      │  (file defs)     │      │  (NetCDF ops)   │
+└───────────────┘      └─────────────────┘      └─────────────────┘
 ```
 
-## Directory Structure
+## Domain Decomposition (MPI)
 
-```
-.
-├── io_constants.F90      # Global constants (lengths, compression, verbose)
-├── io_error.F90          # Error handling
-├── grid_module.F90       # Grid and axis definitions
-├── io_definitions.F90    # Variable type definitions
-├── io_file_registry.F90  # File and averaging state types
-├── io_config.F90         # Namelist parsing, group expansion
-├── io_naming.F90         # Filename generation
-├── io_manager.F90        # High-level I/O coordination
-├── io_netcdf.F90         # NetCDF implementation
-├── netcdf_backend.F90    # Low-level NetCDF operations
-├── netcdf_utils.F90      # NetCDF utilities
-├── var_definitions.F90   # Variable definition helpers
-├── var_registry.F90      # Grid creation, variable registration
-├── ocean_var.F90         # Model variables (example)
-├── main_test_output.F90  # Test program
-├── output_config.nml     # Configuration file
-└── Makefile
-```
-
-## Configuration Reference
-
-### Global Settings
+Configure in `mpi_param.F90`:
 
 ```fortran
-&io_files_nml
-   nml_output_prefix = "ocean"                    ! File prefix
-   nml_time_units = "seconds since 2023-01-01"    ! CF time units
-   nml_calendar = "gregorian"                     ! Calendar type
-   
-   ! Compression (NetCDF-4)
-   nml_compression = .true.                       ! Enable compression
-   nml_compression_level = 4                      ! 0-9 (0=none, 9=max)
-   
-   ! Diagnostics
-   nml_flush_freq = 0                             ! Flush every N writes (0=disabled)
-   nml_verbose = 1                                ! 0=quiet, 1=normal, 2=debug
-/
+integer, parameter :: NP_XI = 2    ! Processes in X direction
+integer, parameter :: NP_ETA = 2   ! Processes in Y direction
+integer, parameter :: NNODES = 4   ! Total = NP_XI × NP_ETA
+integer, parameter :: LLm = 40     ! Global X size
+integer, parameter :: MMm = 40     ! Global Y size
+integer, parameter :: N = 5        ! Vertical levels
 ```
 
-### Variable Groups
-
-```fortran
-   group_name(1) = "surface"
-   group_vars(1) = "zeta,u,v"
-   
-   group_name(2) = "prognostic"
-   group_vars(2) = "zeta,u,v,temp"
-```
-
-### Output Files
-
-```fortran
-   ! Hourly instantaneous output
-   file_name(1) = "hourly"
-   file_freq(1) = 3600.0              ! Frequency in seconds
-   file_operation(1) = "instant"      ! instant, average, min, max, accumulate
-   file_vars(1) = "@surface,wind"     ! Groups and/or individual variables
-   
-   ! Daily averages
-   file_name(2) = "daily_avg"
-   file_freq(2) = 86400.0
-   file_operation(2) = "average"
-   file_vars(2) = "@surface,temp"
-   
-   ! Restart file (final only)
-   file_name(3) = "restart"
-   file_freq(3) = -1.0                ! -1 = final only
-   file_operation(3) = "instant"
-   file_vars(3) = "@prognostic"
-   file_restart(3) = .true.
-   file_restart_nlevels(3) = 2        ! Store 2 time levels
-   file_double(3) = .true.            ! Double precision
-```
-
-### File Operations
-
-| Operation | Description |
-|-----------|-------------|
-| `instant` | Write current values |
-| `average` | Time-averaged values |
-| `min` | Minimum over period |
-| `max` | Maximum over period |
-| `accumulate` | Sum over period |
-
-## Adding New Variables
-
-### 1. Define the variable data (ocean_var.F90)
-
-```fortran
-real, dimension(:,:), allocatable, target :: my_new_var
-```
-
-### 2. Register the variable (var_definitions.F90)
-
-```fortran
-call define_2d_var("my_var", "My Variable Description", "units", &
-                   grd_rho, my_new_var, &
-                   standard_name="standard_cf_name", &    ! Optional
-                   valid_min=0.0, valid_max=100.0)        ! Optional
-```
-
-### 3. Add to configuration (output_config.nml)
-
-```fortran
-   ! Add to a group
-   group_vars(1) = "zeta,u,v,my_var"
-   
-   ! Or reference directly in a file
-   file_vars(1) = "@surface,my_var"
-```
-
-## Output Files
-
-### Naming Convention
-
-```
-<prefix>_<name>_<frequency>s.nc
-```
-
-Examples:
-- `ocean_hourly_3600s.nc`
-- `ocean_daily_avg_86400s.nc`
-- `ocean_restart.nc`
-
-### Global Attributes
-
-All files include CF-compliant global attributes:
-
-```
-:Conventions = "CF-1.8"
-:title = "MIAOU ocean model output"
-:institution = "LEGOS/CNRS"
-:source = "MIAOU v0.8.0"
-:history = "2025-04-15T14:30:22 Created by MIAOU I/O system"
-:file_name = "hourly"
-:output_frequency_seconds = 3600.0
-```
-
-## API Usage
-
-### Basic Workflow
-
-```fortran
-program my_model
-   use io_manager
-   use var_registry
-   
-   ! 1. Initialize I/O system
-   call initialize_io("output_config.nml")
-   
-   ! 2. Create grids and register variables
-   call init_variables()
-   
-   ! 3. Time loop
-   do while (time <= end_time)
-      ! ... model computations ...
-      
-      ! Write output (handled automatically based on frequencies)
-      call write_output(time, is_final=(time >= end_time))
-      
-      time = time + dt
-   end do
-   
-   ! 4. Cleanup
-   call finalize_io()
-end program
-```
-
-## Extending MIAOU
-
-### Adding a New Backend
-
-To add support for HDF5, ADIOS2, or another format:
-
-1. Create `hdf5_backend.F90` with same interface as `netcdf_backend.F90`
-2. Create `io_hdf5.F90` with same interface as `io_netcdf.F90`
-3. Modify `io_manager.F90` to select backend based on configuration
-
-The current architecture is designed for this extension (planned for v2.0).
-
-## Version History
-
-- **v0.8.0** (2025-04): File-centric architecture, groups, validation, CF metadata, restart support, compression, flush, verbosity
-- **v0.7.0** (2025-04): File-centric refactoring
-- **v0.6.0** (2025-04): Variable composition types
-
-See [CHANGELOG.md](CHANGELOG.md) for detailed changes.
->>>>>>> 352d4fb (Ajout fichiers restants de A)
-
-## Key Features
-
-<<<<<<< HEAD
-- **File-Centric Configuration**: Define output files with their variables, frequencies, and operations
-- **Variable Groups**: Reusable groups of variables (`@surface`, `@prognostic`)
-- **Multiple Operations**: Instantaneous, average, min, max, accumulate
-- **Restart Support**: Multi-level time restart files with final-only option
-- **NetCDF-4 Compression**: Configurable deflate compression
-- **CF-Compliant**: Standard metadata attributes (standard_name, valid_range, coordinates)
-- **Validation**: Automatic check of configuration at initialization
-- **Flexible Dimensions**: Support for 0D (scalar) to 3D variables
-- **Verbosity Control**: Quiet, normal, or debug output levels
-- **Periodic Flush**: Protection against data loss during long simulations
-
-## Quick Start
-
-### Building
-
-```bash
-# Adjust NCDF_ROOT in Makefile to your NetCDF installation
-make
-```
-
-### Running
-
-```bash
-./test_output.exe
-```
-
-### Basic Configuration
-
-```fortran
-&io_files_nml
-   nml_output_prefix = "ocean"
-   
-   ! Define variable groups
-   group_name(1) = "surface"
-   group_vars(1) = "zeta,u,v"
-   
-   ! Define output files
-   file_name(1) = "hourly"
-   file_freq(1) = 3600.0
-   file_operation(1) = "instant"
-   file_vars(1) = "@surface"
-/
-```
-
-## Architecture
-
-```
-┌─────────────────┐     ┌─────────────────┐     ┌─────────────────┐
-│   io_manager    │────▶│   io_config     │────▶│   io_netcdf     │
-│  (orchestration)│     │ (configuration) │     │    (backend)    │
-└─────────────────┘     └─────────────────┘     └─────────────────┘
-         │                      │                        │
-         ▼                      ▼                        ▼
-┌─────────────────┐     ┌─────────────────┐     ┌─────────────────┐
-│  io_definitions │     │io_file_registry │     │ netcdf_backend  │
-│   (var types)   │     │  (file types)   │     │  (low-level)    │
-└─────────────────┘     └─────────────────┘     └─────────────────┘
-```
-
-## Directory Structure
-
-```
-.
-├── io_constants.F90      # Global constants (lengths, compression, verbose)
-├── io_error.F90          # Error handling
-├── grid_module.F90       # Grid and axis definitions
-├── io_definitions.F90    # Variable type definitions
-├── io_file_registry.F90  # File and averaging state types
-├── io_config.F90         # Namelist parsing, group expansion
-├── io_naming.F90         # Filename generation
-├── io_manager.F90        # High-level I/O coordination
-├── io_netcdf.F90         # NetCDF implementation
-├── netcdf_backend.F90    # Low-level NetCDF operations
-├── netcdf_utils.F90      # NetCDF utilities
-├── var_definitions.F90   # Variable definition helpers
-├── var_registry.F90      # Grid creation, variable registration
-├── ocean_var.F90         # Model variables (example)
-├── main_test_output.F90  # Test program
-├── output_config.nml     # Configuration file
-└── Makefile
-```
-
-## Configuration Reference
-
-### Global Settings
-
-```fortran
-&io_files_nml
-   nml_output_prefix = "ocean"                    ! File prefix
-   nml_time_units = "seconds since 2023-01-01"    ! CF time units
-   nml_calendar = "gregorian"                     ! Calendar type
-   
-   ! Compression (NetCDF-4)
-   nml_compression = .true.                       ! Enable compression
-   nml_compression_level = 4                      ! 0-9 (0=none, 9=max)
-   
-   ! Diagnostics
-   nml_flush_freq = 0                             ! Flush every N writes (0=disabled)
-   nml_verbose = 1                                ! 0=quiet, 1=normal, 2=debug
-/
-```
-
-### Variable Groups
-
-```fortran
-   group_name(1) = "surface"
-   group_vars(1) = "zeta,u,v"
-   
-   group_name(2) = "prognostic"
-   group_vars(2) = "zeta,u,v,temp"
-```
-
-### Output Files
-
-```fortran
-   ! Hourly instantaneous output
-   file_name(1) = "hourly"
-   file_freq(1) = 3600.0              ! Frequency in seconds
-   file_operation(1) = "instant"      ! instant, average, min, max, accumulate
-   file_vars(1) = "@surface,wind"     ! Groups and/or individual variables
-   
-   ! Daily averages
-   file_name(2) = "daily_avg"
-   file_freq(2) = 86400.0
-   file_operation(2) = "average"
-   file_vars(2) = "@surface,temp"
-   
-   ! Restart file (final only)
-   file_name(3) = "restart"
-   file_freq(3) = -1.0                ! -1 = final only
-   file_operation(3) = "instant"
-   file_vars(3) = "@prognostic"
-   file_restart(3) = .true.
-   file_restart_nlevels(3) = 2        ! Store 2 time levels
-   file_double(3) = .true.            ! Double precision
-```
-
-### File Operations
-
-| Operation | Description |
-|-----------|-------------|
-| `instant` | Write current values |
-| `average` | Time-averaged values |
-| `min` | Minimum over period |
-| `max` | Maximum over period |
-| `accumulate` | Sum over period |
-
-## Adding New Variables
-
-### 1. Define the variable data (ocean_var.F90)
-
-```fortran
-real, dimension(:,:), allocatable, target :: my_new_var
-```
-
-### 2. Register the variable (var_definitions.F90)
-
-```fortran
-call define_2d_var("my_var", "My Variable Description", "units", &
-                   grd_rho, my_new_var, &
-                   standard_name="standard_cf_name", &    ! Optional
-                   valid_min=0.0, valid_max=100.0)        ! Optional
-```
-
-### 3. Add to configuration (output_config.nml)
-
-```fortran
-   ! Add to a group
-   group_vars(1) = "zeta,u,v,my_var"
-   
-   ! Or reference directly in a file
-   file_vars(1) = "@surface,my_var"
-```
-
-## Output Files
-
-### Naming Convention
-
-```
-<prefix>_<name>_<frequency>s.nc
-```
-
-Examples:
-- `ocean_hourly_3600s.nc`
-- `ocean_daily_avg_86400s.nc`
-- `ocean_restart.nc`
-
-### Global Attributes
-
-All files include CF-compliant global attributes:
-
-```
-:Conventions = "CF-1.8"
-:title = "MIAOU ocean model output"
-:institution = "LEGOS/CNRS"
-:source = "MIAOU v0.8.0"
-:history = "2025-04-15T14:30:22 Created by MIAOU I/O system"
-:file_name = "hourly"
-:output_frequency_seconds = 3600.0
-```
-
-## API Usage
-
-### Basic Workflow
-
-```fortran
-program my_model
-   use io_manager
-   use var_registry
-   
-   ! 1. Initialize I/O system
-   call initialize_io("output_config.nml")
-   
-   ! 2. Create grids and register variables
-   call init_variables()
-   
-   ! 3. Time loop
-   do while (time <= end_time)
-      ! ... model computations ...
-      
-      ! Write output (handled automatically based on frequencies)
-      call write_output(time, is_final=(time >= end_time))
-      
-      time = time + dt
-   end do
-   
-   ! 4. Cleanup
-   call finalize_io()
-end program
-```
-
-## Extending MIAOU
-
-### Adding a New Backend
-
-To add support for HDF5, ADIOS2, or another format:
-
-1. Create `hdf5_backend.F90` with same interface as `netcdf_backend.F90`
-2. Create `io_hdf5.F90` with same interface as `io_netcdf.F90`
-3. Modify `io_manager.F90` to select backend based on configuration
-
-The current architecture is designed for this extension (planned for v2.0).
-
-## Version History
-
-- **v0.8.0** (2025-04): File-centric architecture, groups, validation, CF metadata, restart support, compression, flush, verbosity
-- **v0.7.0** (2025-04): File-centric refactoring
-- **v0.6.0** (2025-04): Variable composition types
-
-See [CHANGELOG.md](CHANGELOG.md) for detailed changes.
+## Source Files
+
+| File | Description |
+|------|-------------|
+| `io_manager.F90` | Main orchestration module |
+| `io_config.F90` | Namelist configuration reader |
+| `io_netcdf.F90` | NetCDF backend implementation |
+| `io_file_registry.F90` | File definitions and state |
+| `mpi_param.F90` | MPI parameters and decomposition |
+| `mpi_setup.F90` | MPI initialization (CROCO-style) |
+| `io_mpi_sync.F90` | Token-passing synchronization |
+| `netcdf_backend.F90` | NetCDF write operations |
+| `output_config.nml` | Example configuration |
+| `run_all_tests.sh` | Comprehensive test script |
+| `verify_output.py` | Python verification script |
 
 ## Requirements
 
-- Fortran compiler (gfortran 8.0+ or ifort 19.0+)
-- NetCDF-Fortran library (4.5+)
-- FORD (optional, for documentation)
+- Fortran compiler (gfortran, ifort, etc.)
+- NetCDF-Fortran library
+- MPI (for parallel builds)
+- Python 3 + netCDF4 (for verification script)
+- NetCDF with parallel HDF5 (for NC4PAR mode only)
+
+### Checking NetCDF Parallel Support
+
+```bash
+nc-config --has-parallel4   # Returns "yes" if NC4PAR supported
+nc-config --has-hdf5        # Returns "yes" if HDF5 available
+```
+
+## CPP Keys
+
+| Key | Description |
+|-----|-------------|
+| `MPI` | Enable MPI support |
+| `PARALLEL_FILES` | One file per process (with MPI) |
+| `NC4PAR` | Parallel NetCDF-4 I/O (with MPI) |
 
 ## License
 
-[To be defined]
+MIAOU is released under the CeCILL-C license, compatible with the CROCO ocean model licensing.
 
 ## Authors
 
-- Rachid Benshila (LEGOS/CNRS)
+- MIAOU Team
+- LEGOS / CNRS / IRD
 
-## Acknowledgments
+## Version History
 
-Developed for the CROCO ocean modeling community.
+See [CHANGELOG.md](CHANGELOG.md) for detailed version history.

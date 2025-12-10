@@ -15,8 +15,9 @@ module netcdf_backend
    use netcdf_utils
    use grid_module
    use io_constants, only: io_compression_enabled, io_compression_level
-#ifdef NC4PAR
-   use mpi_param, only: iminmpi, jminmpi
+#if defined(MPI) && !defined(PARALLEL_FILES)
+   ! For NC4PAR or sequential mode: need global offsets
+   use mpi_param, only: iminmpi, jminmpi, LLm, MMm
 #endif
    implicit none
    private
@@ -57,15 +58,13 @@ contains
    !> @param[out]    varid         ID of the newly defined variable
    subroutine nc_define_variable(ncid, ndims, var_name, var_long_name, var_units, &
                                  grid_axes, time_dimid, varid)
-#ifdef NC4PAR
-      use mpi_param, only: LLm, MMm
-#endif
       integer, intent(in) :: ncid, ndims, time_dimid
       character(len=*), intent(in) :: var_name, var_long_name, var_units
       type(axis), intent(inout) :: grid_axes(:)
       integer, intent(out) :: varid
 
       integer :: i, ncerr, dim_id, dim_size
+
       integer, allocatable :: dim_ids(:)
 
       ! Define all spatial dimensions from the grid
@@ -75,8 +74,9 @@ contains
 
          if (ncerr /= nf90_noerr) then
             ! Determine dimension size
-#ifdef NC4PAR
-            ! Use global dimensions for xi/eta in parallel mode
+#if defined(MPI) && !defined(PARALLEL_FILES)
+            ! Use global dimensions for xi/eta in shared file modes
+            ! (NC4PAR or sequential I/O)
             if (index(grid_axes(i)%name, 'xi_') == 1) then
                dim_size = LLm
             else if (index(grid_axes(i)%name, 'eta_') == 1) then
@@ -186,7 +186,7 @@ contains
 
    !> Write a 2D variable to a NetCDF file
    !>
-   !> In NC4PAR mode, uses global offsets (iminmpi, jminmpi) for parallel write
+   !> In shared file modes (NC4PAR or sequential), uses global offsets
    !>
    !> @param[in] ncid        NetCDF file ID
    !> @param[in] varid       Variable ID in the file
@@ -197,8 +197,8 @@ contains
       real, intent(in) :: data(:, :)    ! Accepts any 2D array
       integer :: start(3), count(3)
 
-#ifdef NC4PAR
-      ! Parallel mode: write at global offset
+#if defined(MPI) && !defined(PARALLEL_FILES)
+      ! Shared file modes: write at global offset
       start = [iminmpi, jminmpi, time_index]
 #else
       start = [1, 1, time_index]
@@ -210,7 +210,7 @@ contains
 
    !> Write a 3D variable to a NetCDF file
    !>
-   !> In NC4PAR mode, uses global offsets (iminmpi, jminmpi) for parallel write
+   !> In shared file modes (NC4PAR or sequential), uses global offsets
    !>
    !> @param[in] ncid        NetCDF file ID
    !> @param[in] varid       Variable ID in the file
@@ -221,8 +221,8 @@ contains
       real, intent(in) :: data(:, :, :)    ! Accepts any 3D array
       integer :: start(4), count(4)
 
-#ifdef NC4PAR
-      ! Parallel mode: write at global offset
+#if defined(MPI) && !defined(PARALLEL_FILES)
+      ! Shared file modes: write at global offset
       start = [iminmpi, jminmpi, 1, time_index]
 #else
       start = [1, 1, 1, time_index]
