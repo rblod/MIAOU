@@ -52,6 +52,8 @@ module io_config
    public :: file_registry   ! Re-export from io_state for backward compatibility
    ! v5.4.0: Validation options
    public :: io_validate_vars, io_warn_empty_files
+   ! v5.5.0: NC4PAR control
+   public :: io_nc4par_required
 
    ! Maximum files and variable string length
    integer, parameter :: MAX_FILES = 20
@@ -78,6 +80,9 @@ module io_config
    !> v5.4.0: Validation options (set from namelist, used by io_manager)
    logical :: io_validate_vars = .true.      !< Check that referenced variables exist
    logical :: io_warn_empty_files = .true.   !< Warn if a file has no variables
+   
+   !> v5.5.0: NC4PAR control - if true, STOP if NC4PAR fails runtime check
+   logical :: io_nc4par_required = .true.
 
 contains
 
@@ -102,6 +107,7 @@ contains
       logical :: nml_strict_config   ! v5.3.0: strict mode stops on first error
       logical :: nml_validate_vars   ! v5.4.0: validate variable references
       logical :: nml_warn_empty_files ! v5.4.0: warn on empty files
+      logical :: nml_nc4par_required  ! v5.5.0: require NC4PAR if compiled with it
 
       ! Variable groups: group_name(i), group_vars(i)
       character(len=32) :: group_name(MAX_GROUPS)
@@ -123,6 +129,7 @@ contains
                               nml_compression, nml_compression_level, &
                               nml_flush_freq, nml_verbose, nml_strict_config, &
                               nml_validate_vars, nml_warn_empty_files, &
+                              nml_nc4par_required, &
                               group_name, group_vars, &
                               file_name, file_freq, file_operation, file_vars, file_prefix, &
                               file_restart, file_restart_nlevels, file_double
@@ -144,6 +151,7 @@ contains
       nml_strict_config = .false.   ! Default: log errors but continue
       nml_validate_vars = .true.    ! Default: validate variable references
       nml_warn_empty_files = .true. ! Default: warn on empty files
+      nml_nc4par_required = .true.  ! Default: require NC4PAR to work if compiled with it
       group_name = ""
       group_vars = ""
       file_name = ""
@@ -199,6 +207,9 @@ contains
       ! v5.4.0: Store validation options
       io_validate_vars = nml_validate_vars
       io_warn_empty_files = nml_warn_empty_files
+      
+      ! v5.5.0: Store NC4PAR control option
+      io_nc4par_required = nml_nc4par_required
       
       if (io_verbose >= IO_NORMAL) then
          if (io_compression_enabled) then

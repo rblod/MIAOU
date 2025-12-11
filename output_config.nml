@@ -18,6 +18,9 @@
    ! Validation options (v5.4.0)
    nml_validate_vars = .true.       ! Validate that referenced variables are registered
    nml_warn_empty_files = .true.    ! Warn if an output file has no variables
+   
+   ! NC4PAR control (v5.5.0) - only relevant when compiled with -DNC4PAR
+   nml_nc4par_required = .true.     ! .true. = STOP if NC4PAR fails, .false. = warn and continue
 
    !---------------------------------------------------------------------------
    ! Variable groups - define reusable sets of variables

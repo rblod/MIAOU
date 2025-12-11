@@ -318,7 +318,7 @@ contains
       character(len=*), intent(in) :: message
       character(len=*), intent(in), optional :: location
 
-      call print_error(IO_SUCCESS, message, location, "WARNING")
+      call print_warning(message, location)
       warning_count = warning_count + 1
    end subroutine io_report_warning
 
@@ -414,6 +414,23 @@ contains
             trim(severity), trim(code_name), trim(message)
       end if
    end subroutine print_error
+
+   !---------------------------------------------------------------------------
+   !> @brief Print warning message (without error code)
+   !---------------------------------------------------------------------------
+   subroutine print_warning(message, location)
+      character(len=*), intent(in) :: message
+      character(len=*), intent(in), optional :: location
+
+      if (.not. verbose_mode) return
+
+      ! Print warning message without code
+      if (present(location) .and. len_trim(location) > 0) then
+         print '(A,": ",A," (in ",A,")")', "WARNING", trim(message), trim(location)
+      else
+         print '(A,": ",A)', "WARNING", trim(message)
+      end if
+   end subroutine print_warning
 
    !---------------------------------------------------------------------------
    !> @brief Get human-readable error code name

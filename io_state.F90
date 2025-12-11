@@ -77,13 +77,9 @@ contains
    !> Use this between test cases to ensure clean state.
    !---------------------------------------------------------------------------
    subroutine reset_io_state()
-      ! Reset file registry
-      ! Note: output_file_registry doesn't have a clear method yet
-      ! For now, we just create a new empty instance
-      file_registry = output_file_registry()
-      
-      ! Reset variable registry  
-      var_registry = io_var_registry()
+      ! Clear registries properly
+      call file_registry%clear()
+      call var_registry%clear()
       
       ! Reset flags
       io_initialized = .false.

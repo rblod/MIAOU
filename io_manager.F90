@@ -24,7 +24,8 @@ module io_manager
    use io_definitions, only: io_variable, io_var_registry
    use io_config, only: read_io_config, get_output_prefix, get_time_units, &
                         get_calendar, &
-                        io_validate_vars, io_warn_empty_files  ! v5.4.0
+                        io_validate_vars, io_warn_empty_files, &  ! v5.4.0
+                        io_nc4par_required  ! v5.5.0
    use io_state, only: file_registry, var_registry, &
                        is_initialized => io_initialized, &
                        files_created   ! v5.4.0: State in io_state
@@ -37,8 +38,10 @@ module io_manager
                         nc_close_file, nc_define_variable_in_file, &
                         nc_end_definition, nc_write_avg_data, &
                         nc_write_direct_0d, nc_write_direct_1d, &
-                        nc_write_direct_2d, nc_write_direct_3d
+                        nc_write_direct_2d, nc_write_direct_3d, &
+                        nc_has_parallel_support, nc_check_parallel_runtime
 #ifdef MPI
+   use mpi
    use mpi_param, only: mynode, is_master, NNODES
 #endif
 #if defined(MPI) && !defined(PARALLEL_FILES) && !defined(NC4PAR)
@@ -60,6 +63,7 @@ module io_manager
    public :: ensure_files_created
    public :: validate_config   ! v5.4.0: Validate configuration
    public :: var_registry      ! Re-exported from io_state for compatibility
+   public :: get_io_mode_string  ! v5.5.0: Get I/O mode description
 #if defined(MPI) && !defined(PARALLEL_FILES) && !defined(NC4PAR)
    public :: open_all_files_seq, close_all_files_seq
    public :: sync_restart_time_indices, check_restart_rotation
@@ -70,6 +74,31 @@ module io_manager
 contains
 
    !---------------------------------------------------------------------------
+   !> @brief Get a human-readable string describing the I/O mode
+   !>
+   !> Returns one of:
+   !> - "Serial" — Single process, direct writes
+   !> - "MPI Sequential" — Multiple processes, one writes at a time
+   !> - "MPI Parallel Files" — Each process writes its own file
+   !> - "NC4PAR" — Parallel NetCDF-4, all processes write to one file
+   !>
+   !> @return String describing the I/O mode
+   !---------------------------------------------------------------------------
+   function get_io_mode_string() result(mode)
+      character(len=64) :: mode
+      
+#ifdef NC4PAR
+      mode = "NC4PAR (Parallel NetCDF-4, single shared file)"
+#elif defined(PARALLEL_FILES)
+      mode = "MPI Parallel Files (one file per process)"
+#elif defined(MPI)
+      mode = "MPI Sequential (processes write in turn)"
+#else
+      mode = "Serial (single process)"
+#endif
+   end function get_io_mode_string
+
+   !---------------------------------------------------------------------------
    !> @brief Initialize the I/O system
    !>
    !> @param[in] config_file  Optional path to configuration file
@@ -78,18 +107,67 @@ contains
    function initialize_io(config_file) result(status)
       character(len=*), intent(in), optional :: config_file
       integer :: status
+      logical :: nc4par_ok
+      character(len=256) :: nc4par_msg
+      character(len=64) :: io_mode
+      integer :: ierr
 
       status = 0
 
       ! Initialize NetCDF backend
       call nc_initialize()
 
-      ! Read configuration
+      ! Read configuration FIRST (needed for io_nc4par_required)
       if (present(config_file)) then
          status = read_io_config(config_file)
       else
          status = read_io_config("output_config.nml")
       end if
+
+      ! Determine and display I/O mode
+      io_mode = get_io_mode_string()
+      
+#ifdef MPI
+      if (is_master) then
+         print *, ""
+         print *, "I/O Mode: ", trim(io_mode)
+      end if
+      
+      ! Check parallel NetCDF support if compiled with NC4PAR
+      if (nc_has_parallel_support()) then
+         call nc_check_parallel_runtime(nc4par_ok, nc4par_msg)
+         if (is_master) then
+            if (nc4par_ok) then
+               print *, "NC4PAR runtime check: OK"
+               print *, "  ", trim(nc4par_msg)
+            else
+               print *, ""
+               print *, "=============================================="
+               print *, "ERROR: NC4PAR RUNTIME CHECK FAILED"
+               print *, "=============================================="
+               print *, trim(nc4par_msg)
+               print *, "=============================================="
+               print *, ""
+               if (io_nc4par_required) then
+                  print *, "FATAL: NC4PAR is required (nml_nc4par_required=.true.)"
+                  print *, "       Set nml_nc4par_required=.false. to continue with degraded I/O"
+                  print *, "       or recompile without -DNC4PAR for sequential MPI mode."
+               else
+                  print *, "WARNING: Continuing with NC4PAR disabled (nml_nc4par_required=.false.)"
+                  print *, "         File creation may fail or produce incomplete output."
+               end if
+            end if
+         end if
+         ! If NC4PAR required and it failed, stop all processes
+         if (.not. nc4par_ok .and. io_nc4par_required) then
+            call MPI_Barrier(MPI_COMM_WORLD, ierr)
+            call MPI_Abort(MPI_COMM_WORLD, 1, ierr)
+         end if
+      end if
+#else
+      print *, ""
+      print *, "I/O Mode: ", trim(io_mode)
+#endif
 
       is_initialized = .true.
       files_created = .false.

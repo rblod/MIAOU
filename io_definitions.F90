@@ -97,6 +97,7 @@ module io_definitions
       procedure :: size => registry_size
       procedure :: get => registry_get_variable
       procedure :: get_ptr => registry_get_variable_ptr
+      procedure :: clear => registry_clear_variables
    end type io_var_registry
 
 contains
@@ -362,5 +363,18 @@ contains
          nullify(var_ptr)
       end if
    end function registry_get_variable_ptr
+
+   !---------------------------------------------------------------------------
+   !> @brief Clear the variable registry (reset to empty state)
+   !>
+   !> Deallocates all variables and resets count to zero.
+   !> Used for testing and re-initialization.
+   !---------------------------------------------------------------------------
+   subroutine registry_clear_variables(this)
+      class(io_var_registry), intent(inout) :: this
+      
+      if (allocated(this%variables)) deallocate(this%variables)
+      this%count = 0
+   end subroutine registry_clear_variables
 
 end module io_definitions

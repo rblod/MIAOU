@@ -39,6 +39,8 @@ module io_netcdf
    public :: nc_write_time
    ! Direct write (no buffer) - for instant outputs
    public :: nc_write_direct_0d, nc_write_direct_1d, nc_write_direct_2d, nc_write_direct_3d
+   ! Parallel support check (P3.1)
+   public :: nc_has_parallel_support, nc_check_parallel_runtime
 #ifdef NC4PAR
    public :: nc_set_parallel_access
    public :: nc_set_all_parallel_access
@@ -573,6 +575,69 @@ contains
       call nc_write_variable(ncid, varid, val, time_index)
       status = 0
    end function nc_write_direct_3d
+
+   !---------------------------------------------------------------------------
+   !> @brief Check if MIAOU was compiled with NC4PAR support
+   !>
+   !> @return .true. if NC4PAR is enabled at compile time
+   !---------------------------------------------------------------------------
+   function nc_has_parallel_support() result(has_support)
+      logical :: has_support
+#ifdef NC4PAR
+      has_support = .true.
+#else
+      has_support = .false.
+#endif
+   end function nc_has_parallel_support
+
+   !---------------------------------------------------------------------------
+   !> @brief Check if parallel NetCDF actually works at runtime
+   !>
+   !> This tests whether the NetCDF library was compiled with parallel support.
+   !> Even if MIAOU is compiled with -DNC4PAR, the underlying NetCDF library
+   !> might not have parallel I/O support.
+   !>
+   !> @param[out] supported  .true. if parallel NetCDF works
+   !> @param[out] message    Diagnostic message explaining the result
+   !---------------------------------------------------------------------------
+   subroutine nc_check_parallel_runtime(supported, message)
+      logical, intent(out) :: supported
+      character(len=*), intent(out) :: message
+      
+#ifdef NC4PAR
+      integer :: ncid, ncstatus
+      character(len=128) :: test_file
+      
+      ! Try to create a test file with parallel I/O
+      test_file = "/tmp/miaou_nc4par_test.nc"
+      
+      ncstatus = nf90_create(trim(test_file), &
+                             ior(nf90_clobber, ior(nf90_netcdf4, nf90_mpiio)), &
+                             ncid, comm=MPI_COMM_WORLD, info=MPI_INFO_NULL)
+      
+      if (ncstatus == nf90_noerr) then
+         ! Success - parallel NetCDF works
+         supported = .true.
+         message = "Parallel NetCDF-4 (NC4PAR) is available and working"
+         ncstatus = nf90_close(ncid)
+         ! Clean up test file (master only)
+         if (mynode == 0) then
+            open(unit=99, file=trim(test_file), status='old')
+            close(unit=99, status='delete')
+         end if
+      else
+         ! Failed - NetCDF library doesn't support parallel I/O
+         supported = .false.
+         message = "ERROR: NC4PAR enabled but NetCDF library lacks parallel support. " // &
+                   "NetCDF error: " // trim(nf90_strerror(ncstatus)) // ". " // &
+                   "Rebuild NetCDF with --enable-parallel4 or use MPI sequential mode."
+      end if
+#else
+      ! Not compiled with NC4PAR
+      supported = .false.
+      message = "NC4PAR not enabled at compile time. Using sequential/parallel-files mode."
+#endif
+   end subroutine nc_check_parallel_runtime
 
 #ifdef NC4PAR
    !---------------------------------------------------------------------------

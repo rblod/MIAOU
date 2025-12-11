@@ -2,6 +2,34 @@
 
 All notable changes to MIAOU are documented in this file.
 
+## [5.5.0] - 2025-12
+
+### Added
+- **NC4PAR runtime verification** (P3.1):
+  - `nc_check_parallel_runtime()` tests if NetCDF parallel I/O actually works
+  - New namelist option `nml_nc4par_required = .true.` — Controls behavior when NC4PAR fails:
+    - If `.true.` (default): STOP with clear error message
+    - If `.false.`: Warning and continue (may fail later)
+  - Clear diagnostic messages explaining what's wrong and how to fix it
+- **I/O mode display**: `get_io_mode_string()` function shows active I/O mode:
+  - "Serial (single process)"
+  - "MPI Sequential (processes write in turn)"  
+  - "MPI Parallel Files (one file per process)"
+  - "NC4PAR (Parallel NetCDF-4, single shared file)"
+- **CI-ready test suite** (P3.2):
+  - `--junit=FILE` option generates JUnit XML reports for CI systems
+  - `--ci` option disables colors for cleaner CI logs
+  - `--help` option shows usage
+  - Proper exit codes (0=pass, 1=fail)
+
+### Changed
+- Config is now read BEFORE NC4PAR check (so `nml_nc4par_required` takes effect)
+- Test suite cleanup no longer deletes .o/.mod files (faster consecutive test runs)
+- I/O mode is displayed at initialization for better diagnostics
+
+### Fixed
+- Warning messages no longer show spurious `[SUCCESS]` code
+
 ## [5.4.0] - 2025-12
 
 ### Added

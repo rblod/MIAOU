@@ -149,6 +149,7 @@ module io_file_registry
       procedure :: get_ptr => registry_get_file_ptr
       procedure :: size => registry_size
       procedure :: get_files_for_variable => registry_files_for_var
+      procedure :: clear => registry_clear
    end type output_file_registry
 
 contains
@@ -695,6 +696,19 @@ contains
       integer :: sz
       sz = this%count
    end function registry_size
+
+   !---------------------------------------------------------------------------
+   !> @brief Clear the registry (reset to empty state)
+   !>
+   !> Deallocates all files and resets count to zero.
+   !> Used for testing and re-initialization.
+   !---------------------------------------------------------------------------
+   subroutine registry_clear(this)
+      class(output_file_registry), intent(inout) :: this
+      
+      if (allocated(this%files)) deallocate(this%files)
+      this%count = 0
+   end subroutine registry_clear
 
    !---------------------------------------------------------------------------
    !> @brief Get all files containing a variable

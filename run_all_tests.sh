@@ -2,13 +2,18 @@
 #===============================================================================
 # MIAOU I/O Test Suite
 # Tests all I/O modes: serial, MPI sequential, MPI parallel files, NC4PAR
+# Also includes configuration validation tests
 #
 # Usage:
-#   ./run_all_tests.sh          # Run all tests
-#   ./run_all_tests.sh serial   # Run only serial test
-#   ./run_all_tests.sh mpi      # Run only MPI sequential test
-#   ./run_all_tests.sh mpi_pf   # Run only MPI parallel files test
-#   ./run_all_tests.sh nc4par   # Run only NC4PAR test
+#   ./run_all_tests.sh                    # Run all tests
+#   ./run_all_tests.sh serial             # Run only serial test
+#   ./run_all_tests.sh mpi                # Run only MPI sequential test
+#   ./run_all_tests.sh mpi_pf             # Run only MPI parallel files test
+#   ./run_all_tests.sh nc4par             # Run only NC4PAR test
+#   ./run_all_tests.sh validation         # Run config validation test
+#   ./run_all_tests.sh validation_strict  # Run strict mode validation test
+#   ./run_all_tests.sh all_io             # Run all I/O tests (skip validation)
+#   ./run_all_tests.sh serial mpi         # Run multiple specific tests
 #
 # Exit codes:
 #   0 = All tests passed
@@ -35,6 +40,7 @@ fi
 # Configuration
 NP=4  # Number of MPI processes
 VERIFY_SCRIPT="verify_output.py"
+JUNIT_OUTPUT=""  # Set to filename to generate JUnit XML
 
 # Results tracking (Bash 3 compatible - use simple variables)
 TOTAL_TESTS=0
@@ -44,6 +50,12 @@ RESULTS_SERIAL=""
 RESULTS_MPI=""
 RESULTS_MPI_PF=""
 RESULTS_NC4PAR=""
+RESULTS_VALIDATION=""
+RESULTS_VALIDATION_STRICT=""
+
+# JUnit XML storage
+JUNIT_TESTCASES=""
+JUNIT_START_TIME=$(date +%s)
 
 #===============================================================================
 # Helper functions
@@ -75,7 +87,8 @@ print_info() {
 
 cleanup() {
     print_subheader "Cleaning up"
-    rm -f *.nc *.o *.mod test_output.exe 2>/dev/null || true
+    rm -f *.nc test_output.exe 2>/dev/null || true
+    # Don't remove .o and .mod - let individual tests handle their own clean
     print_info "Removed temporary files"
 }
 
@@ -243,6 +256,117 @@ test_nc4par() {
         "NC4PAR (Parallel NetCDF-4, single shared file)"
 }
 
+#===============================================================================
+# Validation tests
+#===============================================================================
+
+test_validation() {
+    TOTAL_TESTS=$((TOTAL_TESTS + 1))
+    print_header "TEST: Configuration Validation (detect errors)"
+    
+    # Build first
+    print_subheader "Building serial"
+    make clean >/dev/null 2>&1
+    make serial 2>&1 | tail -5
+    if [ ${PIPESTATUS[0]} -ne 0 ]; then
+        print_failure "Build failed"
+        RESULTS_VALIDATION="FAILED (build)"
+        FAILED_TESTS=$((FAILED_TESTS + 1))
+        return 1
+    fi
+    
+    # Save original config
+    cp output_config.nml output_config.nml.backup
+    
+    # Use test config with errors
+    cp test_validation.nml output_config.nml
+    
+    print_subheader "Running with invalid config (should show errors but continue)"
+    rm -f *.nc
+    output=$(./test_output.exe 2>&1)
+    run_status=$?
+    
+    # Restore config
+    mv output_config.nml.backup output_config.nml
+    
+    # Check that errors were detected
+    if echo "$output" | grep -q "ERROR.*VAR_NOTFOUND.*temperatue"; then
+        print_success "Typo 'temperatue' correctly detected"
+    else
+        print_failure "Typo detection failed"
+        RESULTS_VALIDATION="FAILED (typo detection)"
+        FAILED_TESTS=$((FAILED_TESTS + 1))
+        return 1
+    fi
+    
+    if echo "$output" | grep -q "WARNING.*empty_file.*no variables"; then
+        print_success "Empty file warning correctly generated"
+    else
+        print_failure "Empty file warning missing"
+        RESULTS_VALIDATION="FAILED (empty file warning)"
+        FAILED_TESTS=$((FAILED_TESTS + 1))
+        return 1
+    fi
+    
+    # In non-strict mode, should still complete
+    if [ $run_status -eq 0 ]; then
+        print_success "Non-strict mode: continued despite errors"
+    else
+        print_failure "Non-strict mode: should not have failed"
+        RESULTS_VALIDATION="FAILED (non-strict exit)"
+        FAILED_TESTS=$((FAILED_TESTS + 1))
+        return 1
+    fi
+    
+    print_success "Validation test passed"
+    RESULTS_VALIDATION="PASSED"
+    PASSED_TESTS=$((PASSED_TESTS + 1))
+    return 0
+}
+
+test_validation_strict() {
+    TOTAL_TESTS=$((TOTAL_TESTS + 1))
+    print_header "TEST: Strict Mode Validation (fail on errors)"
+    
+    # Build first
+    print_subheader "Building serial"
+    make clean >/dev/null 2>&1
+    make serial 2>&1 | tail -3
+    if [ ${PIPESTATUS[0]} -ne 0 ]; then
+        print_failure "Build failed"
+        RESULTS_VALIDATION_STRICT="FAILED (build)"
+        FAILED_TESTS=$((FAILED_TESTS + 1))
+        return 1
+    fi
+    
+    # Save original config
+    cp output_config.nml output_config.nml.backup
+    
+    # Use strict test config
+    cp test_strict.nml output_config.nml
+    
+    print_subheader "Running with strict mode (should fail on error)"
+    rm -f *.nc
+    ./test_output.exe 2>&1 | tail -10
+    run_status=${PIPESTATUS[0]}
+    
+    # Restore config
+    mv output_config.nml.backup output_config.nml
+    
+    # In strict mode with missing var, should fail
+    if [ $run_status -ne 0 ]; then
+        print_success "Strict mode: correctly failed on invalid config"
+        RESULTS_VALIDATION_STRICT="PASSED"
+        PASSED_TESTS=$((PASSED_TESTS + 1))
+        return 0
+    else
+        print_failure "Strict mode: should have failed but didn't"
+        RESULTS_VALIDATION_STRICT="FAILED (should fail)"
+        FAILED_TESTS=$((FAILED_TESTS + 1))
+        return 1
+    fi
+}
+
 print_result() {
     local mode=$1
     local result=$2
@@ -268,19 +392,73 @@ print_result() {
 # Main
 #===============================================================================
 
-print_header "MIAOU I/O Test Suite"
+# Parse options and tests
+CI_MODE=false
+TESTS=""
+
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --junit=*)
+            JUNIT_OUTPUT="${1#--junit=}"
+            ;;
+        --junit)
+            if [ -n "$2" ] && [ "${2:0:1}" != "-" ]; then
+                JUNIT_OUTPUT="$2"
+                shift
+            else
+                echo "Error: --junit requires a filename"
+                exit 1
+            fi
+            ;;
+        --ci)
+            CI_MODE=true
+            # Disable colors in CI mode
+            RED=''
+            GREEN=''
+            YELLOW=''
+            BLUE=''
+            NC=''
+            ;;
+        --help|-h)
+            echo "Usage: $0 [OPTIONS] [TESTS...]"
+            echo ""
+            echo "Options:"
+            echo "  --junit=FILE  Generate JUnit XML report"
+            echo "  --ci          CI mode (no colors, minimal output)"
+            echo "  --help        Show this help"
+            echo ""
+            echo "Tests: serial, mpi, mpi_pf, nc4par, validation, validation_strict, all_io"
+            echo ""
+            echo "If no tests specified, all tests are run."
+            exit 0
+            ;;
+        -*)
+            echo "Unknown option: $1"
+            exit 1
+            ;;
+        *)
+            TESTS="$TESTS $1"
+            ;;
+    esac
+    shift
+done
+
+# Default to all tests if none specified
+if [ -z "$TESTS" ]; then
+    TESTS="serial mpi mpi_pf nc4par validation validation_strict"
+fi
+
+print_header "MIAOU I/O Test Suite v5.5.0"
 echo ""
 echo "Testing configuration:"
 echo "  - MPI processes: $NP"
 echo "  - Verify script: $VERIFY_SCRIPT"
 echo "  - NetCDF parallel: $(check_netcdf_parallel && echo 'yes' || echo 'no')"
-
-# Determine which tests to run
-if [ $# -eq 0 ]; then
-    # Run all tests
-    TESTS="serial mpi mpi_pf nc4par"
-else
-    TESTS="$@"
+if [ -n "$JUNIT_OUTPUT" ]; then
+    echo "  - JUnit output: $JUNIT_OUTPUT"
+fi
+if [ "$CI_MODE" = true ]; then
+    echo "  - CI mode: enabled"
 fi
 
 # Run selected tests
@@ -298,9 +476,22 @@ for test in $TESTS; do
         nc4par)
             test_nc4par || true
             ;;
+        validation)
+            test_validation || true
+            ;;
+        validation_strict)
+            test_validation_strict || true
+            ;;
+        all_io)
+            # Just I/O mode tests without validation
+            test_serial || true
+            test_mpi_sequential || true
+            test_mpi_parallel_files || true
+            test_nc4par || true
+            ;;
         *)
             echo "Unknown test: $test"
-            echo "Valid tests: serial, mpi, mpi_pf, nc4par"
+            echo "Valid tests: serial, mpi, mpi_pf, nc4par, validation, validation_strict, all_io"
             ;;
     esac
 done
@@ -308,10 +499,14 @@ done
 # Summary
 print_header "TEST SUMMARY"
 printf "\n"
-print_result "serial" "$RESULTS_SERIAL"
-print_result "mpi" "$RESULTS_MPI"
-print_result "mpi_pf" "$RESULTS_MPI_PF"
-print_result "nc4par" "$RESULTS_NC4PAR"
+printf "I/O Mode Tests:\n"
+print_result "  serial" "$RESULTS_SERIAL"
+print_result "  mpi" "$RESULTS_MPI"
+print_result "  mpi_pf" "$RESULTS_MPI_PF"
+print_result "  nc4par" "$RESULTS_NC4PAR"
+printf "\nValidation Tests:\n"
+print_result "  validation" "$RESULTS_VALIDATION"
+print_result "  validation_strict" "$RESULTS_VALIDATION_STRICT"
 
 printf "\n"
 printf "Total: %d tests\n" "$TOTAL_TESTS"
@@ -320,6 +515,42 @@ printf "  %sFailed: %d%s\n" "${RED}" "$FAILED_TESTS" "${NC}"
 
 # Cleanup
 cleanup
+
+# Generate JUnit XML if requested
+if [ -n "$JUNIT_OUTPUT" ]; then
+    JUNIT_END_TIME=$(date +%s)
+    JUNIT_DURATION=$((JUNIT_END_TIME - JUNIT_START_TIME))
+    
+    cat > "$JUNIT_OUTPUT" << EOF
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="MIAOU" tests="$TOTAL_TESTS" failures="$FAILED_TESTS" time="$JUNIT_DURATION">
+EOF
+    
+    # Add test cases
+    add_junit_testcase() {
+        local name="$1"
+        local result="$2"
+        if [[ "$result" == "PASSED" ]]; then
+            echo "  <testcase name=\"$name\" classname=\"MIAOU.IO\"/>" >> "$JUNIT_OUTPUT"
+        elif [[ "$result" == SKIPPED* ]]; then
+            echo "  <testcase name=\"$name\" classname=\"MIAOU.IO\"><skipped message=\"${result#SKIPPED: }\"/></testcase>" >> "$JUNIT_OUTPUT"
+        else
+            echo "  <testcase name=\"$name\" classname=\"MIAOU.IO\"><failure message=\"$result\"/></testcase>" >> "$JUNIT_OUTPUT"
+        fi
+    }
+    
+    [ -n "$RESULTS_SERIAL" ] && add_junit_testcase "serial" "$RESULTS_SERIAL"
+    [ -n "$RESULTS_MPI" ] && add_junit_testcase "mpi_sequential" "$RESULTS_MPI"
+    [ -n "$RESULTS_MPI_PF" ] && add_junit_testcase "mpi_parallel_files" "$RESULTS_MPI_PF"
+    [ -n "$RESULTS_NC4PAR" ] && add_junit_testcase "nc4par" "$RESULTS_NC4PAR"
+    [ -n "$RESULTS_VALIDATION" ] && add_junit_testcase "validation" "$RESULTS_VALIDATION"
+    [ -n "$RESULTS_VALIDATION_STRICT" ] && add_junit_testcase "validation_strict" "$RESULTS_VALIDATION_STRICT"
+    
+    echo "</testsuite>" >> "$JUNIT_OUTPUT"
+    
+    echo ""
+    echo "JUnit XML report written to: $JUNIT_OUTPUT"
+fi
 
 # Exit with appropriate code
 if [ $FAILED_TESTS -gt 0 ]; then
