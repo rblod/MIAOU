@@ -2,6 +2,35 @@
 
 All notable changes to MIAOU are documented in this file.
 
+## [5.4.0] - 2025-12
+
+### Added
+- **Configuration validation** (`validate_config()` function):
+  - Checks that all variables referenced in output files are registered
+  - Warns about empty output files (no variables)
+  - Validates frequency values (>0 for non-restart files)
+  - Returns error count for programmatic checking
+- **New namelist options**:
+  - `nml_validate_vars = .true.` — Enable/disable variable existence checking
+  - `nml_warn_empty_files = .true.` — Enable/disable empty file warnings
+- **New module `io_state.F90`**: Centralizes runtime state
+  - `file_registry` — Registry of output files (moved from io_config)
+  - `var_registry` — Registry of model variables (moved from io_manager)
+  - `reset_io_state()` — Clear all state for unit testing
+  - `io_initialized`, `files_created` flags
+
+### Changed
+- **State separation** (P2.2):
+  - `io_config.F90` now imports `file_registry` from `io_state` instead of declaring it
+  - `io_manager.F90` now imports `var_registry` from `io_state` instead of declaring it
+  - Both modules re-export their registries for backward compatibility
+- Validation is now called explicitly after variable registration (not automatically in create_all_files)
+
+### Improved
+- Clear error messages for missing variables: "Variable 'X' in file 'Y' is not registered"
+- Validation summary: "Configuration valid: N files, M variables registered"
+- Better separation of concerns between parsing and runtime state
+
 ## [5.3.0] - 2025-12
 
 ### Added

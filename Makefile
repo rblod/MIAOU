@@ -31,8 +31,8 @@ FFLAGS_BASE = -g -Wall -Wextra -fcheck=all -fbacktrace -O0 -cpp
 MPIF90 = mpif90
 
 # NetCDF configuration
-NCDF_INC = $(shell /usr/local/bin/nf-config --fflags 2>/dev/null || echo "-I/usr/local/include")
-NCDF_LIB = $(shell /usr/local/bin/nf-config --flibs 2>/dev/null || echo "-L/usr/local/lib -lnetcdff -lnetcdf")
+NCDF_INC = $(shell nf-config --fflags 2>/dev/null || echo "-I/usr/include")
+NCDF_LIB = $(shell nf-config --flibs 2>/dev/null || echo "-lnetcdff -lnetcdf")
 
 #===============================================================================
 # Source files by dependency level
@@ -45,6 +45,7 @@ SRCS_MPI = mpi_param.F90 mpi_setup.F90 io_mpi_sync.F90
 SRCS_L0 = io_constants.F90 io_error.F90 grid_module.F90
 SRCS_L1 = io_naming.F90 netcdf_utils.F90 io_definitions.F90
 SRCS_L2 = netcdf_backend.F90 io_file_registry.F90
+SRCS_L2b = io_state.F90
 SRCS_L3 = io_netcdf.F90 io_config.F90
 SRCS_L4 = io_manager.F90
 SRCS_L5 = ocean_var.F90
@@ -53,11 +54,11 @@ SRCS_L7 = var_registry.F90
 SRCS_L8 = main_test_output.F90
 
 # All sources (serial)
-SRCS_SERIAL = $(SRCS_L0) $(SRCS_L1) $(SRCS_L2) $(SRCS_L3) $(SRCS_L4) $(SRCS_L5) $(SRCS_L6) $(SRCS_L7) $(SRCS_L8)
+SRCS_SERIAL = $(SRCS_L0) $(SRCS_L1) $(SRCS_L2) $(SRCS_L2b) $(SRCS_L3) $(SRCS_L4) $(SRCS_L5) $(SRCS_L6) $(SRCS_L7) $(SRCS_L8)
 OBJS_SERIAL = $(SRCS_SERIAL:.F90=.o)
 
 # All sources (MPI) - MPI modules first
-SRCS_PARALLEL = $(SRCS_MPI) $(SRCS_L0) $(SRCS_L1) $(SRCS_L2) $(SRCS_L3) $(SRCS_L4) $(SRCS_L5) $(SRCS_L6) $(SRCS_L7) $(SRCS_L8)
+SRCS_PARALLEL = $(SRCS_MPI) $(SRCS_L0) $(SRCS_L1) $(SRCS_L2) $(SRCS_L2b) $(SRCS_L3) $(SRCS_L4) $(SRCS_L5) $(SRCS_L6) $(SRCS_L7) $(SRCS_L8)
 OBJS_PARALLEL = $(SRCS_PARALLEL:.F90=.o)
 
 # Target executable
@@ -183,18 +184,22 @@ io_definitions.o: io_definitions.F90 io_constants.o grid_module.o
 netcdf_backend.o: netcdf_backend.F90 netcdf_utils.o grid_module.o
 	$(if $(findstring -DMPI,$(FFLAGS)),$(MPIF90),$(FC)) $(FFLAGS) -c $<
 
-io_file_registry.o: io_file_registry.F90 io_constants.o
+io_file_registry.o: io_file_registry.F90 io_constants.o io_error.o
+	$(if $(findstring -DMPI,$(FFLAGS)),$(MPIF90),$(FC)) $(FFLAGS) -c $<
+
+# Level 2b - io_state (v5.4.0)
+io_state.o: io_state.F90 io_file_registry.o io_definitions.o
 	$(if $(findstring -DMPI,$(FFLAGS)),$(MPIF90),$(FC)) $(FFLAGS) -c $<
 
 # Level 3
-io_netcdf.o: io_netcdf.F90 io_constants.o netcdf_utils.o netcdf_backend.o grid_module.o io_definitions.o io_file_registry.o
+io_netcdf.o: io_netcdf.F90 io_constants.o netcdf_utils.o netcdf_backend.o grid_module.o io_definitions.o io_file_registry.o io_error.o
 	$(if $(findstring -DMPI,$(FFLAGS)),$(MPIF90),$(FC)) $(FFLAGS) -c $<
 
-io_config.o: io_config.F90 io_constants.o io_file_registry.o
+io_config.o: io_config.F90 io_constants.o io_file_registry.o io_state.o io_error.o
 	$(if $(findstring -DMPI,$(FFLAGS)),$(MPIF90),$(FC)) $(FFLAGS) -c $<
 
-# Level 4 - io_manager depends on mpi_io in sequential mode
-io_manager.o: io_manager.F90 io_constants.o io_definitions.o io_config.o io_file_registry.o io_naming.o io_netcdf.o
+# Level 4 - io_manager depends on io_state
+io_manager.o: io_manager.F90 io_constants.o io_definitions.o io_config.o io_file_registry.o io_naming.o io_netcdf.o io_state.o io_error.o
 	$(if $(findstring -DMPI,$(FFLAGS)),$(MPIF90),$(FC)) $(FFLAGS) -c $<
 
 # Level 5 - ocean_var depends on mpi_param in MPI mode

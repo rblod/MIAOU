@@ -17,6 +17,7 @@ module io_netcdf_avg
    use io_definitions, only: io_variable
    use io_averaging, only: avg_accumulate, avg_reset, avg_is_ready
    use netcdf_backend, only: nc_write_variable
+   use io_error
    implicit none
    private
 
@@ -82,7 +83,9 @@ contains
 
       ! Check if we have data to write
       if (.not. avg_is_ready(var_ptr)) then
-         print *, "Warning: No data accumulated for averaging: ", trim(var_ptr%meta%name)
+         call io_report_warning( &
+            "No data accumulated for averaging: " // trim(var_ptr%meta%name), &
+            "write_variable_avg")
          return
       end if
 

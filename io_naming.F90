@@ -21,10 +21,10 @@ module io_naming
    private
 
    public :: generate_filename
+   public :: generate_filename_mpi
    public :: parse_filename
    public :: set_default_extension
    public :: get_default_extension
-   public :: generate_filename_mpi
    public :: add_mpi_suffix
 
    !> Default file extension (can be changed by backend)

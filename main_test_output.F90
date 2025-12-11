@@ -140,6 +140,21 @@ program main_test_output
 #endif
 
    !---------------------------------------------------------------------------
+   ! Validate configuration (v5.4.0)
+   !---------------------------------------------------------------------------
+   status = validate_config()
+   if (status > 0) then
+#ifdef MPI
+      if (is_master) then
+#endif
+         print *, "WARNING: Configuration has ", status, " error(s)"
+         print *, "         Check variable names in output_config.nml"
+#ifdef MPI
+      end if
+#endif
+   end if
+
+   !---------------------------------------------------------------------------
    ! Time loop
    !---------------------------------------------------------------------------
 #ifdef MPI

@@ -39,6 +39,7 @@ module io_config
                            io_flush_freq, io_verbose, IO_QUIET, IO_NORMAL, IO_DEBUG
    use io_file_registry, only: output_file_def, output_file_registry, &
                                OP_INSTANT, OP_AVERAGE, OP_MIN, OP_MAX, OP_ACCUMULATE
+   use io_state, only: file_registry   ! v5.4.0: Registry now in io_state
    use io_error
    implicit none
    private
@@ -48,7 +49,9 @@ module io_config
    public :: get_output_prefix
    public :: get_time_units
    public :: get_calendar
-   public :: file_registry
+   public :: file_registry   ! Re-export from io_state for backward compatibility
+   ! v5.4.0: Validation options
+   public :: io_validate_vars, io_warn_empty_files
 
    ! Maximum files and variable string length
    integer, parameter :: MAX_FILES = 20
@@ -70,10 +73,11 @@ module io_config
    type(var_group_def), private :: var_groups(MAX_GROUPS)
    integer, private :: num_groups = 0
 
-   ! File registry 
-   ! NOTE: file_registry is declared here for convenience.
-   ! Future refactor could separate config parsing from runtime state.
-   type(output_file_registry), target :: file_registry
+   ! v5.4.0: file_registry is now in io_state module (imported above)
+
+   !> v5.4.0: Validation options (set from namelist, used by io_manager)
+   logical :: io_validate_vars = .true.      !< Check that referenced variables exist
+   logical :: io_warn_empty_files = .true.   !< Warn if a file has no variables
 
 contains
 
@@ -96,6 +100,8 @@ contains
       integer :: nml_flush_freq
       integer :: nml_verbose
       logical :: nml_strict_config   ! v5.3.0: strict mode stops on first error
+      logical :: nml_validate_vars   ! v5.4.0: validate variable references
+      logical :: nml_warn_empty_files ! v5.4.0: warn on empty files
 
       ! Variable groups: group_name(i), group_vars(i)
       character(len=32) :: group_name(MAX_GROUPS)
@@ -116,6 +122,7 @@ contains
       namelist /io_files_nml/ nml_output_prefix, nml_time_units, nml_calendar, &
                               nml_compression, nml_compression_level, &
                               nml_flush_freq, nml_verbose, nml_strict_config, &
+                              nml_validate_vars, nml_warn_empty_files, &
                               group_name, group_vars, &
                               file_name, file_freq, file_operation, file_vars, file_prefix, &
                               file_restart, file_restart_nlevels, file_double
@@ -135,6 +142,8 @@ contains
       nml_flush_freq = 0
       nml_verbose = 1
       nml_strict_config = .false.   ! Default: log errors but continue
+      nml_validate_vars = .true.    ! Default: validate variable references
+      nml_warn_empty_files = .true. ! Default: warn on empty files
       group_name = ""
       group_vars = ""
       file_name = ""
@@ -186,6 +195,10 @@ contains
             print *, "Strict config mode enabled (stop on first error)"
          end if
       end if
+      
+      ! v5.4.0: Store validation options
+      io_validate_vars = nml_validate_vars
+      io_warn_empty_files = nml_warn_empty_files
       
       if (io_verbose >= IO_NORMAL) then
          if (io_compression_enabled) then

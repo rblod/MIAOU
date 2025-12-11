@@ -1,0 +1,23 @@
+&io_files_nml
+   ! Global settings
+   nml_output_prefix = "ocean"
+   nml_time_units = "seconds since 2023-01-01 00:00:00"
+   nml_calendar = "gregorian"
+   
+   ! Strict mode OFF - will continue with warnings/errors
+   nml_strict_config = .false.
+   nml_validate_vars = .true.
+   nml_warn_empty_files = .true.
+   
+   ! File 1: Contains a typo in variable name
+   file_name(1) = "test_invalid"
+   file_freq(1) = 3600.0
+   file_operation(1) = "instant"
+   file_vars(1) = "zeta,u,v,temperatue"   ! <-- typo: "temperatue" instead of "temp"
+   
+   ! File 2: Empty file (no variables)
+   file_name(2) = "empty_file"
+   file_freq(2) = 7200.0
+   file_operation(2) = "instant"
+   file_vars(2) = ""
+/

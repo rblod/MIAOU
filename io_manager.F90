@@ -23,7 +23,11 @@ module io_manager
                            io_flush_freq, io_verbose, IO_QUIET, IO_NORMAL, IO_DEBUG
    use io_definitions, only: io_variable, io_var_registry
    use io_config, only: read_io_config, get_output_prefix, get_time_units, &
-                        get_calendar, file_registry
+                        get_calendar, &
+                        io_validate_vars, io_warn_empty_files  ! v5.4.0
+   use io_state, only: file_registry, var_registry, &
+                       is_initialized => io_initialized, &
+                       files_created   ! v5.4.0: State in io_state
    use io_file_registry, only: output_file_def, output_file_registry, avg_state, &
                                OP_INSTANT, OP_AVERAGE, OP_MIN, OP_MAX, OP_ACCUMULATE
    use io_naming, only: generate_filename, add_mpi_suffix
@@ -54,17 +58,14 @@ module io_manager
    public :: get_variable_ptr
    public :: process_var_instant, process_var_average
    public :: ensure_files_created
+   public :: validate_config   ! v5.4.0: Validate configuration
+   public :: var_registry      ! Re-exported from io_state for compatibility
 #if defined(MPI) && !defined(PARALLEL_FILES) && !defined(NC4PAR)
    public :: open_all_files_seq, close_all_files_seq
    public :: sync_restart_time_indices, check_restart_rotation
 #endif
 
-   ! Variable registry
-   type(io_var_registry), public, target :: var_registry
-
-   ! Module state
-   logical, private :: is_initialized = .false.
-   logical, private :: files_created = .false.
+   ! v5.4.0: var_registry, is_initialized, files_created now in io_state module
 
 contains
 
@@ -136,6 +137,87 @@ contains
       call var_registry%add(var)
       print *, "Registered variable: ", trim(var%meta%name)
    end subroutine register_variable
+
+   !---------------------------------------------------------------------------
+   !> @brief Validate configuration after variables are registered (v5.4.0)
+   !>
+   !> Checks that:
+   !> 1. All variables referenced in output files exist in var_registry
+   !> 2. No output file is empty (has no variables)
+   !> 3. Frequency values are valid (>0 for non-restart, any for restart)
+   !>
+   !> @return Number of validation errors found
+   !---------------------------------------------------------------------------
+   function validate_config() result(num_errors)
+      integer :: num_errors
+      
+      integer :: i, j, var_idx
+      type(output_file_def), pointer :: file_ptr
+      character(len=256) :: msg
+      integer :: num_warnings
+      
+      num_errors = 0
+      num_warnings = 0
+      
+      if (io_verbose >= IO_NORMAL) then
+         print *, ""
+         print *, "=== Validating I/O configuration ==="
+      end if
+      
+      ! Check each file definition
+      do i = 1, file_registry%size()
+         file_ptr => file_registry%get_ptr(i)
+         if (.not. associated(file_ptr)) cycle
+         
+         ! Check for empty files
+         if (io_warn_empty_files) then
+            if (file_ptr%num_variables == 0) then
+               write(msg, '(A,A,A)') "Output file '", trim(file_ptr%name), &
+                  "' has no variables defined"
+               call io_report_warning(trim(msg), "validate_config")
+               num_warnings = num_warnings + 1
+            end if
+         end if
+         
+         ! Check each variable reference
+         if (io_validate_vars) then
+            do j = 1, file_ptr%num_variables
+               var_idx = var_registry%find(file_ptr%variables(j))
+               
+               if (var_idx < 0) then
+                  write(msg, '(A,A,A,A,A)') "Variable '", &
+                     trim(file_ptr%variables(j)), &
+                     "' in file '", trim(file_ptr%name), &
+                     "' is not registered"
+                  call io_report_error(IO_ERR_VAR_NOTFOUND, trim(msg), "validate_config")
+                  num_errors = num_errors + 1
+               end if
+            end do
+         end if
+         
+         ! Check frequency validity (non-restart files need freq > 0)
+         if (.not. file_ptr%is_restart .and. file_ptr%frequency <= 0.0) then
+            write(msg, '(A,A,A,G12.4)') "File '", trim(file_ptr%name), &
+               "' has invalid frequency: ", file_ptr%frequency
+            call io_report_error(IO_ERR_CONFIG, trim(msg), "validate_config")
+            num_errors = num_errors + 1
+         end if
+      end do
+      
+      ! Summary
+      if (io_verbose >= IO_NORMAL) then
+         if (num_errors == 0 .and. num_warnings == 0) then
+            print *, "Configuration valid: ", file_registry%size(), " files, ", &
+               var_registry%size(), " variables registered"
+         else
+            print *, "Validation complete: ", num_errors, " errors, ", &
+               num_warnings, " warnings"
+         end if
+         print *, "======================================"
+         print *, ""
+      end if
+      
+   end function validate_config
 
    !---------------------------------------------------------------------------
    !> @brief Get pointer to a registered variable by name
@@ -372,8 +454,8 @@ contains
       character(len=IO_PATH_LEN) :: filename
       logical :: do_create
 
-      ! First validate configuration (all processes)
-      call validate_config()
+      ! Note: validation is now done by calling validate_config() explicitly
+      ! after variables are registered (v5.4.0)
 
       do file_idx = 1, file_registry%size()
          file_ptr => file_registry%get_ptr(file_idx)
@@ -452,58 +534,6 @@ contains
       end do
    end subroutine create_all_files
 
-   !---------------------------------------------------------------------------
-   !> @brief Validate configuration: check that all referenced variables exist
-   !>
-   !> Prints warnings for variables referenced in file definitions but not
-   !> registered in the variable registry.
-   !---------------------------------------------------------------------------
-   subroutine validate_config()
-      integer :: file_idx, var_idx, j
-      type(output_file_def), pointer :: file_ptr
-      character(len=32) :: var_name
-      integer :: missing_count, total_refs
-
-      missing_count = 0
-      total_refs = 0
-
-      if (io_verbose >= IO_NORMAL) then
-         print *, ""
-         print *, "Validating I/O configuration..."
-      end if
-
-      do file_idx = 1, file_registry%size()
-         file_ptr => file_registry%get_ptr(file_idx)
-         if (.not. associated(file_ptr)) cycle
-
-         do j = 1, file_ptr%num_variables
-            var_name = file_ptr%variables(j)
-            total_refs = total_refs + 1
-
-            var_idx = var_registry%find(var_name)
-            if (var_idx < 0) then
-               call io_report_warning( &
-                  "Variable '" // trim(var_name) // "' in file '" // &
-                  trim(file_ptr%name) // "' is not registered", &
-                  "validate_config")
-               missing_count = missing_count + 1
-            end if
-         end do
-      end do
-
-      if (io_verbose >= IO_NORMAL) then
-         if (missing_count == 0) then
-            print *, "  All ", total_refs, " variable references are valid"
-         else
-            print *, "  Found ", missing_count, " missing variables out of ", total_refs, " references"
-            print *, "  (Missing variables will be skipped during output)"
-         end if
-         print *, ""
-      end if
-
-   end subroutine validate_config
-
-   !---------------------------------------------------------------------------
    !> @brief Define variables for a file
    !---------------------------------------------------------------------------
    subroutine define_variables_in_file(file_ptr)

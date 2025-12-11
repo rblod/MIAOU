@@ -12,6 +12,7 @@ This script:
 
 import os
 import re
+import sys
 import numpy as np
 
 # Try different NetCDF backends
@@ -55,14 +56,25 @@ def get_nc_varnames(ds):
 
 
 # ANSI color codes for terminal output
+# Disable colors if stdout is not a terminal (e.g., when piped)
 class Colors:
-    HEADER = "\033[95m"
-    BLUE = "\033[94m"
-    GREEN = "\033[92m"
-    YELLOW = "\033[93m"
-    RED = "\033[91m"
-    ENDC = "\033[0m"
-    BOLD = "\033[1m"
+    if sys.stdout.isatty():
+        HEADER = "\033[95m"
+        BLUE = "\033[94m"
+        GREEN = "\033[92m"
+        YELLOW = "\033[93m"
+        RED = "\033[91m"
+        ENDC = "\033[0m"
+        BOLD = "\033[1m"
+    else:
+        # No colors when output is redirected/piped
+        HEADER = ""
+        BLUE = ""
+        GREEN = ""
+        YELLOW = ""
+        RED = ""
+        ENDC = ""
+        BOLD = ""
 
 
 def color_print(message, color):
