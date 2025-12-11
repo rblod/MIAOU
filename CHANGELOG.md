@@ -2,6 +2,42 @@
 
 All notable changes to MIAOU are documented in this file.
 
+## [5.3.0] - 2025-12
+
+### Added
+- **Dynamic variable arrays**: Removed hard-coded limits
+  - `MAX_VARS` in `var_definitions.F90` → dynamic allocation with automatic growth
+  - `MAX_VARS_PER_FILE` in `io_file_registry.F90` → dynamic allocation
+  - Arrays grow automatically as needed (starting at 20-50, doubling when full)
+- **Unified error handling via `io_error` module**:
+  - New error codes for allocation (`IO_ERR_ALLOC`), MPI (`IO_ERR_MPI`), etc.
+  - `io_report_error()` and `io_report_warning()` replace scattered `print *` statements
+  - Error/warning counts tracked for summary reporting
+  - `io_check_nc()` helper for NetCDF status codes
+  - `io_error_finalize()` prints summary of errors/warnings
+- **`nml_strict_config` namelist option**: When `.true.`, stops on first I/O error instead of logging and continuing
+- `cleanup_var_definitions()` subroutine to properly deallocate memory
+- `file_init_variables()` method for explicit initialization
+
+### Changed
+- **Error handling**: All I/O errors now go through `io_error` module
+  - Consistent error messages with location tracking
+  - Strict mode stops on first error; normal mode logs and continues
+  - Human-readable error code names in messages
+- **Memory management**: All arrays use allocatable with dynamic growth
+  - No more compile-time limits on variables
+  - Proper allocation error checking with error propagation
+
+### Removed
+- Hard-coded `MAX_VARS = 100` limit
+- Hard-coded `MAX_VARS_PER_FILE = 50` limit
+- Unused `MAX_OUTPUT_FILES` constant
+- Scattered `print *, "ERROR:"` statements (replaced by io_error)
+
+### Fixed
+- Proper error propagation when allocation fails
+- Memory leak prevention with proper deallocation in `cleanup_var_definitions()`
+
 ## [5.2.0] - 2025-12
 
 ### Added

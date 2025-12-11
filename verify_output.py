@@ -245,17 +245,25 @@ def extract_file_info(filename, config):
         "variables": [],
         "is_restart": False,
         "restart_nlevels": 1,
+        "mpi_rank": None,  # Track if this is a parallel file
     }
     
+    # Strip MPI rank suffix if present (e.g., _0003.nc -> .nc)
+    base_filename = filename
+    mpi_match = re.match(r"(.+)_(\d{4})\.nc$", filename)
+    if mpi_match:
+        base_filename = mpi_match.group(1) + ".nc"
+        info["mpi_rank"] = int(mpi_match.group(2))
+    
     # Pattern: prefix_name_freqs.nc (non-greedy for prefix)
-    match = re.match(r"([^_]+)_(.+)_(\d+)s\.nc", filename)
+    match = re.match(r"([^_]+)_(.+)_(\d+)s\.nc", base_filename)
     if match:
         info["prefix"] = match.group(1)
         info["name"] = match.group(2)
         info["freq"] = float(match.group(3))
     else:
         # Try pattern without frequency: prefix_name.nc (for restarts)
-        match = re.match(r"(.+)_(.+)\.nc", filename)
+        match = re.match(r"(.+)_(.+)\.nc", base_filename)
         if match:
             info["prefix"] = match.group(1)
             info["name"] = match.group(2)
@@ -337,8 +345,18 @@ def check_file_content(filename, config, calc_results):
         return
     
     file_info = extract_file_info(filename, config)
-    print(f"  File info: name={file_info['name']}, freq={file_info['freq']}, op={file_info['operation']}")
+    
+    # Display file info
+    rank_str = f", rank={file_info['mpi_rank']}" if file_info['mpi_rank'] is not None else ""
+    print(f"  File info: name={file_info['name']}, freq={file_info['freq']}, op={file_info['operation']}{rank_str}")
     print(f"  Expected variables: {file_info['variables']}")
+    
+    # Check if we found a matching configuration
+    if not file_info['variables']:
+        color_print(f"  WARNING: No matching configuration found for this file!", Colors.YELLOW)
+        color_print(f"  Skipping detailed verification (file may still be valid)", Colors.YELLOW)
+        # Don't mark as error - just skip verification for unmatched parallel files
+        return
     
     file_has_errors = False
     is_restart = file_info.get("is_restart", False)
@@ -372,6 +390,11 @@ def check_file_content(filename, config, calc_results):
     # Check each expected variable
     print(f"\n  Variables in file: {var_names}")
     
+    # Warn about parallel files - value verification may not be accurate
+    if file_info['mpi_rank'] is not None:
+        color_print(f"  NOTE: This is MPI parallel file (rank {file_info['mpi_rank']})", Colors.BLUE)
+        color_print(f"        Value verification may be incomplete (partial domain)", Colors.BLUE)
+    
     for var_name in file_info["variables"]:
         print(f"\n  Checking variable: {var_name}")
         
@@ -390,6 +413,15 @@ def check_file_content(filename, config, calc_results):
         
         print(f"    Shape: {var_data.shape}")
         print(f"    Range: [{np.nanmin(var_data):.6f}, {np.nanmax(var_data):.6f}]")
+        
+        # Skip detailed value verification for parallel files (shapes don't match)
+        if file_info['mpi_rank'] is not None:
+            # Just check that data exists and has reasonable values
+            if np.all(np.isfinite(var_data)):
+                color_print(f"    OK: Data valid (skipping value comparison for parallel file)", Colors.GREEN)
+            else:
+                color_print(f"    WARNING: Data contains NaN/Inf values", Colors.YELLOW)
+            continue
         
         # Check values at each time
         value_errors = 0

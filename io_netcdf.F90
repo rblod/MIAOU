@@ -18,6 +18,7 @@ module io_netcdf
    use grid_module, only: grid, axis, create_axis
    use io_definitions, only: io_variable
    use io_file_registry, only: avg_state
+   use io_error
 #ifdef MPI
    use mpi_param, only: mynode, is_master, NNODES, &
                         LLm, MMm, iminmpi, jminmpi, Lm, Mm
@@ -102,15 +103,19 @@ contains
       ncstatus = nf90_create(filename, ior(nf90_clobber, nf90_netcdf4), ncid)
 #endif
       if (ncstatus /= nf90_noerr) then
-         print *, "ERROR: Cannot create file: ", trim(filename)
-         print *, "       NetCDF error: ", trim(nf90_strerror(ncstatus))
+         call io_report_error(IO_ERR_FILE_CREATE, &
+            "Cannot create file: " // trim(filename) // &
+            " (" // trim(nf90_strerror(ncstatus)) // ")", &
+            "nc_create_file")
          return
       end if
 
       ! Create time dimension (unlimited)
       ncstatus = nf90_def_dim(ncid, "time", nf90_unlimited, time_dimid)
       if (ncstatus /= nf90_noerr) then
-         print *, "ERROR: Cannot create time dimension in: ", trim(filename)
+         call io_report_error(IO_ERR_DIM, &
+            "Cannot create time dimension in: " // trim(filename), &
+            "nc_create_file")
          ncstatus = nf90_close(ncid)
          ncid = -1
          return
@@ -119,7 +124,9 @@ contains
       ! Create time variable
       ncstatus = nf90_def_var(ncid, "time", nf90_real, [time_dimid], time_varid)
       if (ncstatus /= nf90_noerr) then
-         print *, "WARNING: Cannot create time variable in: ", trim(filename)
+         call io_report_warning( &
+            "Cannot create time variable in: " // trim(filename), &
+            "nc_create_file")
          time_varid = -1
       else
          ! Add time attributes
@@ -175,15 +182,19 @@ contains
       ! Open existing file for writing
       ncstatus = nf90_open(filename, nf90_write, ncid)
       if (ncstatus /= nf90_noerr) then
-         print *, "ERROR: Cannot open file: ", trim(filename)
-         print *, "       NetCDF error: ", trim(nf90_strerror(ncstatus))
+         call io_report_error(IO_ERR_FILE_OPEN, &
+            "Cannot open file: " // trim(filename) // &
+            " (" // trim(nf90_strerror(ncstatus)) // ")", &
+            "nc_open_file")
          return
       end if
 
       ! Get time dimension ID
       ncstatus = nf90_inq_dimid(ncid, "time", time_dimid)
       if (ncstatus /= nf90_noerr) then
-         print *, "ERROR: Cannot find time dimension in: ", trim(filename)
+         call io_report_error(IO_ERR_DIM_NOTFOUND, &
+            "Cannot find time dimension in: " // trim(filename), &
+            "nc_open_file")
          ncstatus = nf90_close(ncid)
          ncid = -1
          return
@@ -192,7 +203,9 @@ contains
       ! Get time variable ID
       ncstatus = nf90_inq_varid(ncid, "time", time_varid)
       if (ncstatus /= nf90_noerr) then
-         print *, "WARNING: Cannot find time variable in: ", trim(filename)
+         call io_report_warning( &
+            "Cannot find time variable in: " // trim(filename), &
+            "nc_open_file")
          time_varid = -1
       end if
 
@@ -256,7 +269,9 @@ contains
 
             deallocate(local_axes)
          else
-            print *, "WARNING: Variable ", trim(var%meta%name), " has no axes defined"
+            call io_report_warning( &
+               "Variable " // trim(var%meta%name) // " has no axes defined", &
+               "nc_define_variable_in_file")
             return
          end if
       end if
@@ -319,7 +334,7 @@ contains
 
       status = nf90_enddef(ncid)
       if (status /= nf90_noerr) then
-         print *, "WARNING: Error ending definition mode"
+         call io_report_warning("Error ending definition mode", "nc_end_definition")
          status = -1
       else
          status = 0
@@ -346,7 +361,9 @@ contains
 
       ! Get variable ID
       if (nf90_inq_varid(ncid, trim(var%meta%name), varid) /= nf90_noerr) then
-         print *, "WARNING: Variable ", trim(var%meta%name), " not found in file"
+         call io_report_warning( &
+            "Variable " // trim(var%meta%name) // " not found in file", &
+            "nc_write_variable_data")
          return
       end if
 
@@ -407,10 +424,9 @@ contains
       type(avg_state), intent(in) :: state
       integer :: status
 
-      integer :: varid, shp(3)
+      integer :: varid
       real :: scalar_result
       real, allocatable :: result_1d(:), result_2d(:,:), result_3d(:,:,:)
-      logical :: success
 
       status = -1
       if (ncid <= 0) return
@@ -425,49 +441,38 @@ contains
       ! NOTE: We use state buffers for shape, not var%data (which may be empty)
       select case (var%meta%ndims)
       case (0)
-         success = state%compute_scalar(scalar_result)
-         if (success) then
-            call nc_write_variable(ncid, varid, scalar_result, time_index)
-            status = 0
-         end if
+         scalar_result = state%compute_scalar()
+         call nc_write_variable(ncid, varid, scalar_result, time_index)
+         status = 0
 
       case (1)
          if (allocated(state%d1)) then
-            shp(1) = size(state%d1)
-            allocate(result_1d(shp(1)))
-            success = state%compute_1d(result_1d)
-            if (success) then
+            result_1d = state%compute_1d()
+            if (allocated(result_1d)) then
                call nc_write_variable(ncid, varid, result_1d, time_index)
                status = 0
+               deallocate(result_1d)
             end if
-            deallocate(result_1d)
          end if
 
       case (2)
          if (allocated(state%d2)) then
-            shp(1) = size(state%d2, 1)
-            shp(2) = size(state%d2, 2)
-            allocate(result_2d(shp(1), shp(2)))
-            success = state%compute_2d(result_2d)
-            if (success) then
+            result_2d = state%compute_2d()
+            if (allocated(result_2d)) then
                call nc_write_variable(ncid, varid, result_2d, time_index)
                status = 0
+               deallocate(result_2d)
             end if
-            deallocate(result_2d)
          end if
 
       case (3)
          if (allocated(state%d3)) then
-            shp(1) = size(state%d3, 1)
-            shp(2) = size(state%d3, 2)
-            shp(3) = size(state%d3, 3)
-            allocate(result_3d(shp(1), shp(2), shp(3)))
-            success = state%compute_3d(result_3d)
-            if (success) then
+            result_3d = state%compute_3d()
+            if (allocated(result_3d)) then
                call nc_write_variable(ncid, varid, result_3d, time_index)
                status = 0
+               deallocate(result_3d)
             end if
-            deallocate(result_3d)
          end if
       end select
 
@@ -498,7 +503,7 @@ contains
                               start=[time_index], count=[1])
 
       if (ncstatus /= nf90_noerr) then
-         print *, "WARNING: Error writing time value"
+         call io_report_warning("Error writing time value", "nc_write_time")
          return
       end if
 
@@ -585,7 +590,8 @@ contains
       
       ncstatus = nf90_var_par_access(ncid, varid, NF90_COLLECTIVE)
       if (ncstatus /= NF90_NOERR) then
-         print *, "Warning: Failed to set parallel access for variable, varid=", varid
+         call io_report_warning("Failed to set parallel access for variable", &
+            "nc_set_parallel_access")
       end if
    end subroutine nc_set_parallel_access
 

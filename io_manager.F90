@@ -27,6 +27,7 @@ module io_manager
    use io_file_registry, only: output_file_def, output_file_registry, avg_state, &
                                OP_INSTANT, OP_AVERAGE, OP_MIN, OP_MAX, OP_ACCUMULATE
    use io_naming, only: generate_filename, add_mpi_suffix
+   use io_error
    use io_netcdf, only: nc_initialize, nc_finalize, nc_create_file, nc_open_file, &
                         nc_write_variable_data, nc_write_time, &
                         nc_close_file, nc_define_variable_in_file, &
@@ -218,8 +219,9 @@ contains
             status = nc_open_file(file_ptr%filename, file_ptr%backend_id, &
                                   file_ptr%time_dimid, file_ptr%time_varid)
             if (status /= 0) then
-               print *, "ERROR: Cannot open file for sequential I/O: ", &
-                        trim(file_ptr%filename)
+               call io_report_error(IO_ERR_FILE_OPEN, &
+                  "Cannot open file for sequential I/O: " // trim(file_ptr%filename), &
+                  "open_all_files_seq")
             end if
          end if
       end do
@@ -404,7 +406,9 @@ contains
                                     file_ptr%time_varid)
 
             if (status /= 0) then
-               print *, "ERROR: Failed to create file: ", trim(filename)
+               call io_report_error(IO_ERR_FILE_CREATE, &
+                  "Failed to create file: " // trim(filename), &
+                  "ensure_files_created")
                cycle
             end if
 
@@ -478,8 +482,10 @@ contains
 
             var_idx = var_registry%find(var_name)
             if (var_idx < 0) then
-               print *, "  WARNING: Variable '", trim(var_name), &
-                        "' in file '", trim(file_ptr%name), "' is not registered"
+               call io_report_warning( &
+                  "Variable '" // trim(var_name) // "' in file '" // &
+                  trim(file_ptr%name) // "' is not registered", &
+                  "validate_config")
                missing_count = missing_count + 1
             end if
          end do
@@ -513,7 +519,9 @@ contains
          ! Find variable in registry
          var_idx = var_registry%find(var_name)
          if (var_idx < 0) then
-            print *, "Warning: Variable ", trim(var_name), " not registered, skipping"
+            call io_report_warning( &
+               "Variable " // trim(var_name) // " not registered, skipping", &
+               "define_variables_in_file")
             cycle
          end if
 
@@ -523,7 +531,9 @@ contains
          ! Define in file
          status = nc_define_variable_in_file(file_ptr%backend_id, file_ptr%time_dimid, var_ptr)
          if (status /= 0) then
-            print *, "Warning: Failed to define variable ", trim(var_name)
+            call io_report_warning( &
+               "Failed to define variable " // trim(var_name), &
+               "define_variables_in_file")
          end if
       end do
       
@@ -599,7 +609,9 @@ contains
       logical, intent(in) :: is_final
 
       logical :: is_checkpoint_time
+#if !defined(MPI) || defined(PARALLEL_FILES) || defined(NC4PAR)
       integer :: status
+#endif
       
       ! Determine if we should write
       if (file_ptr%frequency < 0.0) then
@@ -645,7 +657,9 @@ contains
                               file_ptr%time_varid)
 
       if (status /= 0) then
-         print *, "ERROR: Failed to recreate restart file"
+         call io_report_error(IO_ERR_FILE_CREATE, &
+            "Failed to recreate restart file: " // trim(file_ptr%filename), &
+            "recreate_restart_file")
          return
       end if
 

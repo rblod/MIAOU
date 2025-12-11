@@ -50,27 +50,27 @@ RESULTS_NC4PAR=""
 #===============================================================================
 
 print_header() {
-    echo ""
-    echo "${BLUE}============================================================${NC}"
-    echo "${BLUE}$1${NC}"
-    echo "${BLUE}============================================================${NC}"
+    printf "\n"
+    printf "%s============================================================%s\n" "${BLUE}" "${NC}"
+    printf "%s%s%s\n" "${BLUE}" "$1" "${NC}"
+    printf "%s============================================================%s\n" "${BLUE}" "${NC}"
 }
 
 print_subheader() {
-    echo ""
-    echo "${YELLOW}--- $1 ---${NC}"
+    printf "\n"
+    printf "%s--- %s ---%s\n" "${YELLOW}" "$1" "${NC}"
 }
 
 print_success() {
-    echo "${GREEN}✓ $1${NC}"
+    printf "%s✓ %s%s\n" "${GREEN}" "$1" "${NC}"
 }
 
 print_failure() {
-    echo "${RED}✗ $1${NC}"
+    printf "%s✗ %s%s\n" "${RED}" "$1" "${NC}"
 }
 
 print_info() {
-    echo "  $1"
+    printf "  %s\n" "$1"
 }
 
 cleanup() {
@@ -81,7 +81,7 @@ cleanup() {
 
 check_netcdf_parallel() {
     # Check if NetCDF has parallel support
-    if nc-config --has-parallel4 2>/dev/null | grep -q "yes"; then
+    if /usr/local/bin/nc-config --has-parallel4 2>/dev/null | grep -q "yes"; then
         return 0
     else
         return 1
@@ -142,6 +142,7 @@ run_test() {
     local run_cmd=$3
     local expected_files=$4
     local description=$5
+    local build_status run_status
     
     TOTAL_TESTS=$((TOTAL_TESTS + 1))
     
@@ -150,23 +151,27 @@ run_test() {
     # Clean before test
     cleanup
     
-    # Build
+    # Build - capture exit code properly
     print_subheader "Building ($build_target)"
-    if make $build_target 2>&1 | tail -5; then
+    make $build_target 2>&1 | tail -10
+    build_status=${PIPESTATUS[0]}
+    if [ $build_status -eq 0 ]; then
         print_success "Build successful"
     else
-        print_failure "Build failed"
+        print_failure "Build failed (exit code: $build_status)"
         eval "RESULTS_${mode}=\"FAILED (build)\""
         FAILED_TESTS=$((FAILED_TESTS + 1))
         return 1
     fi
     
-    # Run
+    # Run - capture exit code properly
     print_subheader "Running ($run_cmd)"
-    if eval $run_cmd 2>&1 | tail -20; then
+    eval $run_cmd 2>&1 | tail -20
+    run_status=${PIPESTATUS[0]}
+    if [ $run_status -eq 0 ]; then
         print_success "Execution completed"
     else
-        print_failure "Execution failed"
+        print_failure "Execution failed (exit code: $run_status)"
         eval "RESULTS_${mode}=\"FAILED (run)\""
         FAILED_TESTS=$((FAILED_TESTS + 1))
         return 1
@@ -251,7 +256,7 @@ print_result() {
             print_success "$mode: $result"
             ;;
         SKIPPED*)
-            echo "${YELLOW}○ $mode: $result${NC}"
+            printf "%s○ %s: %s%s\n" "${YELLOW}" "$mode" "$result" "${NC}"
             ;;
         *)
             print_failure "$mode: $result"
@@ -302,16 +307,16 @@ done
 
 # Summary
 print_header "TEST SUMMARY"
-echo ""
+printf "\n"
 print_result "serial" "$RESULTS_SERIAL"
 print_result "mpi" "$RESULTS_MPI"
 print_result "mpi_pf" "$RESULTS_MPI_PF"
 print_result "nc4par" "$RESULTS_NC4PAR"
 
-echo ""
-echo "Total: $TOTAL_TESTS tests"
-echo "  ${GREEN}Passed: $PASSED_TESTS${NC}"
-echo "  ${RED}Failed: $FAILED_TESTS${NC}"
+printf "\n"
+printf "Total: %d tests\n" "$TOTAL_TESTS"
+printf "  %sPassed: %d%s\n" "${GREEN}" "$PASSED_TESTS" "${NC}"
+printf "  %sFailed: %d%s\n" "${RED}" "$FAILED_TESTS" "${NC}"
 
 # Cleanup
 cleanup

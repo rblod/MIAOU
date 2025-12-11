@@ -39,6 +39,7 @@ module io_config
                            io_flush_freq, io_verbose, IO_QUIET, IO_NORMAL, IO_DEBUG
    use io_file_registry, only: output_file_def, output_file_registry, &
                                OP_INSTANT, OP_AVERAGE, OP_MIN, OP_MAX, OP_ACCUMULATE
+   use io_error
    implicit none
    private
 
@@ -94,6 +95,7 @@ contains
       integer :: nml_compression_level
       integer :: nml_flush_freq
       integer :: nml_verbose
+      logical :: nml_strict_config   ! v5.3.0: strict mode stops on first error
 
       ! Variable groups: group_name(i), group_vars(i)
       character(len=32) :: group_name(MAX_GROUPS)
@@ -113,7 +115,7 @@ contains
 
       namelist /io_files_nml/ nml_output_prefix, nml_time_units, nml_calendar, &
                               nml_compression, nml_compression_level, &
-                              nml_flush_freq, nml_verbose, &
+                              nml_flush_freq, nml_verbose, nml_strict_config, &
                               group_name, group_vars, &
                               file_name, file_freq, file_operation, file_vars, file_prefix, &
                               file_restart, file_restart_nlevels, file_double
@@ -132,6 +134,7 @@ contains
       nml_compression_level = 4
       nml_flush_freq = 0
       nml_verbose = 1
+      nml_strict_config = .false.   ! Default: log errors but continue
       group_name = ""
       group_vars = ""
       file_name = ""
@@ -146,8 +149,10 @@ contains
       ! Open and read namelist
       open(newunit=iunit, file=filename, status='old', action='read', iostat=ios)
       if (ios /= 0) then
-         print *, "Warning: Could not open config file: ", trim(filename)
-         print *, "Using default configuration"
+         call io_report_warning( &
+            "Could not open config file: " // trim(filename) // &
+            " - using default configuration", &
+            "read_io_config")
          call setup_default_config()
          status = -1
          return
@@ -157,8 +162,9 @@ contains
       close(iunit)
 
       if (ios /= 0) then
-         print *, "Warning: Error reading namelist io_files_nml, iostat=", ios
-         print *, "Using default configuration"
+         call io_report_warning( &
+            "Error reading namelist io_files_nml - using default configuration", &
+            "read_io_config")
          call setup_default_config()
          status = -2
          return
@@ -172,6 +178,14 @@ contains
       io_compression_level = max(0, min(9, nml_compression_level))  ! Clamp to 0-9
       io_flush_freq = max(0, nml_flush_freq)
       io_verbose = max(0, min(2, nml_verbose))  ! Clamp to 0-2
+      
+      ! v5.3.0: Enable strict mode if requested
+      if (nml_strict_config) then
+         call io_error_set_strict(.true.)
+         if (io_verbose >= IO_NORMAL) then
+            print *, "Strict config mode enabled (stop on first error)"
+         end if
+      end if
       
       if (io_verbose >= IO_NORMAL) then
          if (io_compression_enabled) then
@@ -303,7 +317,9 @@ contains
                      end if
                   end do
                   if (.not. found) then
-                     print *, "Warning: Unknown variable group '@", trim(group_ref), "'"
+                     call io_report_warning( &
+                        "Unknown variable group '@" // trim(group_ref) // "'", &
+                        "expand_var_groups")
                   end if
                else
                   ! Regular variable - append as-is
@@ -360,7 +376,9 @@ contains
       case ("accumulate", "ACCUMULATE", "sum", "SUM")
          op = OP_ACCUMULATE
       case default
-         print *, "Warning: Unknown operation '", trim(op_str), "', using instant"
+         call io_report_warning( &
+            "Unknown operation '" // trim(op_str) // "', using instant", &
+            "parse_operation")
          op = OP_INSTANT
       end select
    end function parse_operation

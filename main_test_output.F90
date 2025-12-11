@@ -24,8 +24,11 @@ program main_test_output
    use ocean_var
    use grid_module
 #ifdef MPI
-   use mpi_param, only: mynode, is_master, Lm, Mm, N, ii, jj, NP_XI
+   use mpi_param, only: is_master, Lm, Mm, N
    use mpi_setup, only: mpi_init_decomposition, mpi_finalize_all, mpi_barrier_all
+#endif
+#ifdef PARALLEL_FILES
+   use mpi_param, only: NP_XI, ii, jj
 #endif
 #if defined(MPI) && !defined(PARALLEL_FILES) && !defined(NC4PAR)
    use io_mpi_sync, only: io_wait_turn, io_pass_turn
@@ -40,7 +43,7 @@ program main_test_output
    integer, parameter :: nt = 30                    ! 30 hours of simulation
    real, parameter :: dt_sim = 3600.0               ! 1 hour timestep
    
-   integer :: t, status, i, k
+   integer :: t, status, k
    real :: current_time
 #ifdef MPI
    integer :: ierr

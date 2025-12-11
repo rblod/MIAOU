@@ -11,28 +11,20 @@
 !> - Separates "what a variable is" from "how it's output"
 !> - Aligns with XIOS/ADIOS2 configuration paradigms
 !>
-!> ## Example configuration
+!> ## v5.3.0 Changes
 !>
-!> ```fortran
-!> type(output_file_def) :: hourly, daily_avg
-!>
-!> hourly%name = "surface_hourly"
-!> hourly%frequency = 3600.0
-!> hourly%operation = OP_INSTANT
-!> hourly%variables = ["zeta", "u", "v"]
-!>
-!> daily_avg%name = "daily_mean"
-!> daily_avg%frequency = 86400.0
-!> daily_avg%operation = OP_AVERAGE
-!> daily_avg%variables = ["zeta", "temp"]
-!> ```
+!> - Variables array is now dynamic (no MAX_VARS_PER_FILE limit)
+!> - All errors go through io_error module
+!> - Removed unused MAX_OUTPUT_FILES constant
 !>
 !> @author Rachid Benshila
 !> @date 2025-04
+!> @version 5.3.0
 !===============================================================================
 module io_file_registry
    use io_constants, only: IO_VARNAME_LEN, IO_PATH_LEN, IO_PREFIX_LEN, &
                            IO_FREQ_DISABLED
+   use io_error
    implicit none
    private
 
@@ -48,10 +40,10 @@ module io_file_registry
    integer, public, parameter :: OP_MAX = 4        !< Maximum over period
    integer, public, parameter :: OP_ACCUMULATE = 5 !< Accumulation (sum)
 
-   ! Maximum variables per file
-   integer, parameter :: MAX_VARS_PER_FILE = 50
-   integer, parameter :: MAX_OUTPUT_FILES = 20
-   integer, parameter :: INITIAL_FILE_ALLOC = 10
+   ! Dynamic allocation parameters
+   integer, parameter :: INITIAL_VARS_ALLOC = 20   !< Initial vars per file
+   integer, parameter :: INITIAL_FILE_ALLOC = 10   !< Initial files in registry
+   integer, parameter :: GROW_FACTOR = 2           !< Growth factor for arrays
 
    !---------------------------------------------------------------------------
    !> @brief State for averaging/accumulation operations
@@ -110,8 +102,8 @@ module io_file_registry
       integer :: restart_nlevels = 1                  !< Number of time levels to write
       logical :: double_precision = .false.           !< Write in double precision
       
-      ! Variables in this file
-      character(len=IO_VARNAME_LEN) :: variables(MAX_VARS_PER_FILE) = ""
+      ! Variables in this file (DYNAMIC - no limit)
+      character(len=IO_VARNAME_LEN), allocatable :: variables(:)
       integer :: num_variables = 0
       
       ! Runtime state
@@ -140,6 +132,7 @@ module io_file_registry
       procedure :: is_restart_file => file_is_restart
       procedure :: init_restart_buffer => file_init_restart_buffer
       procedure :: store_restart_time => file_store_restart_time
+      procedure :: init_variables => file_init_variables
    end type output_file_def
 
    !---------------------------------------------------------------------------
@@ -172,6 +165,8 @@ contains
       character(len=*), intent(in) :: var_name
       integer, intent(in) :: operation, ndims
       integer, intent(in), optional :: shp(:)
+      
+      integer :: alloc_stat
 
       this%var_name = var_name
       this%operation = operation
@@ -187,17 +182,35 @@ contains
          this%scalar = 0.0
       case (1)
          if (present(shp)) then
-            allocate(this%d1(shp(1)))
+            allocate(this%d1(shp(1)), stat=alloc_stat)
+            if (alloc_stat /= 0) then
+               call io_report_error(IO_ERR_ALLOC, &
+                  "Failed to allocate 1D avg buffer for " // trim(var_name), &
+                  "avg_state_init")
+               return
+            end if
             this%d1 = 0.0
          end if
       case (2)
          if (present(shp)) then
-            allocate(this%d2(shp(1), shp(2)))
+            allocate(this%d2(shp(1), shp(2)), stat=alloc_stat)
+            if (alloc_stat /= 0) then
+               call io_report_error(IO_ERR_ALLOC, &
+                  "Failed to allocate 2D avg buffer for " // trim(var_name), &
+                  "avg_state_init")
+               return
+            end if
             this%d2 = 0.0
          end if
       case (3)
          if (present(shp)) then
-            allocate(this%d3(shp(1), shp(2), shp(3)))
+            allocate(this%d3(shp(1), shp(2), shp(3)), stat=alloc_stat)
+            if (alloc_stat /= 0) then
+               call io_report_error(IO_ERR_ALLOC, &
+                  "Failed to allocate 3D avg buffer for " // trim(var_name), &
+                  "avg_state_init")
+               return
+            end if
             this%d3 = 0.0
          end if
       end select
@@ -207,7 +220,7 @@ contains
    end subroutine avg_state_init
 
    !---------------------------------------------------------------------------
-   !> @brief Reset averaging state
+   !> @brief Reset averaging state (keep buffers, zero values)
    !---------------------------------------------------------------------------
    subroutine avg_state_reset(this)
       class(avg_state), intent(inout) :: this
@@ -220,35 +233,26 @@ contains
    end subroutine avg_state_reset
 
    !---------------------------------------------------------------------------
-   !> @brief Check if ready to compute result
-   !---------------------------------------------------------------------------
-   function avg_state_is_ready(this) result(ready)
-      class(avg_state), intent(in) :: this
-      logical :: ready
-      ready = (this%initialized .and. this%count > 0)
-   end function avg_state_is_ready
-
-   !---------------------------------------------------------------------------
    !> @brief Accumulate scalar value
    !---------------------------------------------------------------------------
-   subroutine avg_state_accumulate_scalar(this, value)
+   subroutine avg_state_accumulate_scalar(this, val)
       class(avg_state), intent(inout) :: this
-      real, intent(in) :: value
+      real, intent(in) :: val
 
       select case (this%operation)
       case (OP_AVERAGE, OP_ACCUMULATE)
-         this%scalar = this%scalar + value
+         this%scalar = this%scalar + val
       case (OP_MIN)
          if (this%count == 0) then
-            this%scalar = value
+            this%scalar = val
          else
-            this%scalar = min(this%scalar, value)
+            this%scalar = min(this%scalar, val)
          end if
       case (OP_MAX)
          if (this%count == 0) then
-            this%scalar = value
+            this%scalar = val
          else
-            this%scalar = max(this%scalar, value)
+            this%scalar = max(this%scalar, val)
          end if
       end select
       this%count = this%count + 1
@@ -257,26 +261,28 @@ contains
    !---------------------------------------------------------------------------
    !> @brief Accumulate 1D array
    !---------------------------------------------------------------------------
-   subroutine avg_state_accumulate_1d(this, arr)
+   subroutine avg_state_accumulate_1d(this, val)
       class(avg_state), intent(inout) :: this
-      real, intent(in) :: arr(:)
+      real, intent(in) :: val(:)
 
-      if (.not. allocated(this%d1)) return
+      if (.not. allocated(this%d1)) then
+         call this%init(this%var_name, this%operation, 1, shape(val))
+      end if
 
       select case (this%operation)
       case (OP_AVERAGE, OP_ACCUMULATE)
-         this%d1 = this%d1 + arr
+         this%d1 = this%d1 + val
       case (OP_MIN)
          if (this%count == 0) then
-            this%d1 = arr
+            this%d1 = val
          else
-            this%d1 = min(this%d1, arr)
+            this%d1 = min(this%d1, val)
          end if
       case (OP_MAX)
          if (this%count == 0) then
-            this%d1 = arr
+            this%d1 = val
          else
-            this%d1 = max(this%d1, arr)
+            this%d1 = max(this%d1, val)
          end if
       end select
       this%count = this%count + 1
@@ -285,26 +291,28 @@ contains
    !---------------------------------------------------------------------------
    !> @brief Accumulate 2D array
    !---------------------------------------------------------------------------
-   subroutine avg_state_accumulate_2d(this, arr)
+   subroutine avg_state_accumulate_2d(this, val)
       class(avg_state), intent(inout) :: this
-      real, intent(in) :: arr(:,:)
+      real, intent(in) :: val(:,:)
 
-      if (.not. allocated(this%d2)) return
+      if (.not. allocated(this%d2)) then
+         call this%init(this%var_name, this%operation, 2, shape(val))
+      end if
 
       select case (this%operation)
       case (OP_AVERAGE, OP_ACCUMULATE)
-         this%d2 = this%d2 + arr
+         this%d2 = this%d2 + val
       case (OP_MIN)
          if (this%count == 0) then
-            this%d2 = arr
+            this%d2 = val
          else
-            this%d2 = min(this%d2, arr)
+            this%d2 = min(this%d2, val)
          end if
       case (OP_MAX)
          if (this%count == 0) then
-            this%d2 = arr
+            this%d2 = val
          else
-            this%d2 = max(this%d2, arr)
+            this%d2 = max(this%d2, val)
          end if
       end select
       this%count = this%count + 1
@@ -313,134 +321,191 @@ contains
    !---------------------------------------------------------------------------
    !> @brief Accumulate 3D array
    !---------------------------------------------------------------------------
-   subroutine avg_state_accumulate_3d(this, arr)
+   subroutine avg_state_accumulate_3d(this, val)
       class(avg_state), intent(inout) :: this
-      real, intent(in) :: arr(:,:,:)
+      real, intent(in) :: val(:,:,:)
 
-      if (.not. allocated(this%d3)) return
+      if (.not. allocated(this%d3)) then
+         call this%init(this%var_name, this%operation, 3, shape(val))
+      end if
 
       select case (this%operation)
       case (OP_AVERAGE, OP_ACCUMULATE)
-         this%d3 = this%d3 + arr
+         this%d3 = this%d3 + val
       case (OP_MIN)
          if (this%count == 0) then
-            this%d3 = arr
+            this%d3 = val
          else
-            this%d3 = min(this%d3, arr)
+            this%d3 = min(this%d3, val)
          end if
       case (OP_MAX)
          if (this%count == 0) then
-            this%d3 = arr
+            this%d3 = val
          else
-            this%d3 = max(this%d3, arr)
+            this%d3 = max(this%d3, val)
          end if
       end select
       this%count = this%count + 1
    end subroutine avg_state_accumulate_3d
 
    !---------------------------------------------------------------------------
-   !> @brief Compute scalar result
+   !> @brief Compute final scalar value
    !---------------------------------------------------------------------------
-   function avg_state_compute_scalar(this, result_val) result(success)
+   function avg_state_compute_scalar(this) result(val)
       class(avg_state), intent(in) :: this
-      real, intent(out) :: result_val
-      logical :: success
+      real :: val
 
-      success = .false.
-      result_val = 0.0
-
-      if (this%count == 0) return
-
-      select case (this%operation)
-      case (OP_AVERAGE)
-         result_val = this%scalar / real(this%count)
-      case (OP_ACCUMULATE, OP_MIN, OP_MAX)
-         result_val = this%scalar
-      end select
-      success = .true.
+      if (this%operation == OP_AVERAGE .and. this%count > 0) then
+         val = this%scalar / real(this%count)
+      else
+         val = this%scalar
+      end if
    end function avg_state_compute_scalar
 
    !---------------------------------------------------------------------------
-   !> @brief Compute 1D result
+   !> @brief Compute final 1D value
    !---------------------------------------------------------------------------
-   function avg_state_compute_1d(this, result_arr) result(success)
+   function avg_state_compute_1d(this) result(val)
       class(avg_state), intent(in) :: this
-      real, intent(out) :: result_arr(:)
-      logical :: success
+      real, allocatable :: val(:)
 
-      success = .false.
-      if (this%count == 0 .or. .not. allocated(this%d1)) return
+      if (.not. allocated(this%d1)) return
+      allocate(val(size(this%d1)))
 
-      select case (this%operation)
-      case (OP_AVERAGE)
-         result_arr = this%d1 / real(this%count)
-      case (OP_ACCUMULATE, OP_MIN, OP_MAX)
-         result_arr = this%d1
-      end select
-      success = .true.
+      if (this%operation == OP_AVERAGE .and. this%count > 0) then
+         val = this%d1 / real(this%count)
+      else
+         val = this%d1
+      end if
    end function avg_state_compute_1d
 
    !---------------------------------------------------------------------------
-   !> @brief Compute 2D result
+   !> @brief Compute final 2D value
    !---------------------------------------------------------------------------
-   function avg_state_compute_2d(this, result_arr) result(success)
+   function avg_state_compute_2d(this) result(val)
       class(avg_state), intent(in) :: this
-      real, intent(out) :: result_arr(:,:)
-      logical :: success
+      real, allocatable :: val(:,:)
 
-      success = .false.
-      if (this%count == 0 .or. .not. allocated(this%d2)) return
+      if (.not. allocated(this%d2)) return
+      allocate(val(size(this%d2,1), size(this%d2,2)))
 
-      select case (this%operation)
-      case (OP_AVERAGE)
-         result_arr = this%d2 / real(this%count)
-      case (OP_ACCUMULATE, OP_MIN, OP_MAX)
-         result_arr = this%d2
-      end select
-      success = .true.
+      if (this%operation == OP_AVERAGE .and. this%count > 0) then
+         val = this%d2 / real(this%count)
+      else
+         val = this%d2
+      end if
    end function avg_state_compute_2d
 
    !---------------------------------------------------------------------------
-   !> @brief Compute 3D result
+   !> @brief Compute final 3D value
    !---------------------------------------------------------------------------
-   function avg_state_compute_3d(this, result_arr) result(success)
+   function avg_state_compute_3d(this) result(val)
       class(avg_state), intent(in) :: this
-      real, intent(out) :: result_arr(:,:,:)
-      logical :: success
+      real, allocatable :: val(:,:,:)
 
-      success = .false.
-      if (this%count == 0 .or. .not. allocated(this%d3)) return
+      if (.not. allocated(this%d3)) return
+      allocate(val(size(this%d3,1), size(this%d3,2), size(this%d3,3)))
 
-      select case (this%operation)
-      case (OP_AVERAGE)
-         result_arr = this%d3 / real(this%count)
-      case (OP_ACCUMULATE, OP_MIN, OP_MAX)
-         result_arr = this%d3
-      end select
-      success = .true.
+      if (this%operation == OP_AVERAGE .and. this%count > 0) then
+         val = this%d3 / real(this%count)
+      else
+         val = this%d3
+      end if
    end function avg_state_compute_3d
+
+   !---------------------------------------------------------------------------
+   !> @brief Check if averaging state has accumulated data
+   !---------------------------------------------------------------------------
+   function avg_state_is_ready(this) result(ready)
+      class(avg_state), intent(in) :: this
+      logical :: ready
+      ready = (this%count > 0)
+   end function avg_state_is_ready
 
    !===========================================================================
    ! output_file_def methods
    !===========================================================================
 
    !---------------------------------------------------------------------------
-   !> @brief Add a variable to this file
+   !> @brief Initialize variables array
    !---------------------------------------------------------------------------
-   subroutine file_add_variable(this, var_name)
+   subroutine file_init_variables(this, ierr)
+      class(output_file_def), intent(inout) :: this
+      integer, intent(out), optional :: ierr
+      
+      integer :: alloc_stat, local_ierr
+      
+      local_ierr = IO_SUCCESS
+      
+      if (allocated(this%variables)) deallocate(this%variables)
+      
+      allocate(this%variables(INITIAL_VARS_ALLOC), stat=alloc_stat)
+      if (alloc_stat /= 0) then
+         call io_report_error(IO_ERR_ALLOC, &
+            "Failed to allocate variables array for file " // trim(this%name), &
+            "file_init_variables")
+         local_ierr = IO_ERR_ALLOC
+      else
+         this%variables = ""
+         this%num_variables = 0
+      end if
+      
+      if (present(ierr)) ierr = local_ierr
+   end subroutine file_init_variables
+
+   !---------------------------------------------------------------------------
+   !> @brief Add a variable to this file (with dynamic growth)
+   !>
+   !> @param[in]  var_name  Name of variable to add
+   !> @param[out] ierr      Optional error code
+   !---------------------------------------------------------------------------
+   subroutine file_add_variable(this, var_name, ierr)
       class(output_file_def), intent(inout) :: this
       character(len=*), intent(in) :: var_name
+      integer, intent(out), optional :: ierr
+      
+      character(len=IO_VARNAME_LEN), allocatable :: temp(:)
+      integer :: new_size, current_size, alloc_stat, local_ierr
+      
+      local_ierr = IO_SUCCESS
 
-      if (this%num_variables >= MAX_VARS_PER_FILE) then
-         print *, "ERROR: Too many variables in file ", trim(this%name)
-         return
+      ! Initialize if needed
+      if (.not. allocated(this%variables)) then
+         call this%init_variables(local_ierr)
+         if (local_ierr /= IO_SUCCESS) then
+            if (present(ierr)) ierr = local_ierr
+            return
+         end if
       end if
 
       ! Check for duplicates
-      if (this%has_variable(var_name)) return
+      if (this%has_variable(var_name)) then
+         if (present(ierr)) ierr = IO_SUCCESS
+         return
+      end if
+
+      current_size = size(this%variables)
+      
+      ! Expand if needed
+      if (this%num_variables >= current_size) then
+         new_size = current_size * GROW_FACTOR
+         allocate(temp(new_size), stat=alloc_stat)
+         if (alloc_stat /= 0) then
+            call io_report_error(IO_ERR_ALLOC, &
+               "Failed to expand variables array for file " // trim(this%name), &
+               "file_add_variable")
+            if (present(ierr)) ierr = IO_ERR_ALLOC
+            return
+         end if
+         temp = ""
+         temp(1:this%num_variables) = this%variables(1:this%num_variables)
+         call move_alloc(temp, this%variables)
+      end if
 
       this%num_variables = this%num_variables + 1
       this%variables(this%num_variables) = var_name
+      
+      if (present(ierr)) ierr = local_ierr
    end subroutine file_add_variable
 
    !---------------------------------------------------------------------------
@@ -453,6 +518,8 @@ contains
       integer :: i
 
       has_var = .false.
+      if (.not. allocated(this%variables)) return
+      
       do i = 1, this%num_variables
          if (trim(this%variables(i)) == trim(var_name)) then
             has_var = .true.
@@ -496,12 +563,18 @@ contains
    !---------------------------------------------------------------------------
    subroutine file_init_avg_states(this)
       class(output_file_def), intent(inout) :: this
-      integer :: i
+      integer :: i, alloc_stat
 
       if (this%operation == OP_INSTANT) return
       if (allocated(this%avg_states)) deallocate(this%avg_states)
 
-      allocate(this%avg_states(this%num_variables))
+      allocate(this%avg_states(this%num_variables), stat=alloc_stat)
+      if (alloc_stat /= 0) then
+         call io_report_error(IO_ERR_ALLOC, &
+            "Failed to allocate avg_states for file " // trim(this%name), &
+            "file_init_avg_states")
+         return
+      end if
 
       do i = 1, this%num_variables
          this%avg_states(i)%var_name = this%variables(i)
@@ -537,17 +610,29 @@ contains
       class(output_file_registry), intent(inout) :: this
       type(output_file_def), intent(in) :: file_def
       type(output_file_def), allocatable :: temp(:)
-      integer :: new_size
+      integer :: new_size, alloc_stat
 
       if (.not. allocated(this%files)) then
-         allocate(this%files(INITIAL_FILE_ALLOC))
+         allocate(this%files(INITIAL_FILE_ALLOC), stat=alloc_stat)
+         if (alloc_stat /= 0) then
+            call io_report_error(IO_ERR_ALLOC, &
+               "Failed to allocate file registry", &
+               "registry_add_file")
+            return
+         end if
          this%count = 0
       end if
 
       ! Expand if needed
       if (this%count >= size(this%files)) then
-         new_size = size(this%files) * 2
-         allocate(temp(new_size))
+         new_size = size(this%files) * GROW_FACTOR
+         allocate(temp(new_size), stat=alloc_stat)
+         if (alloc_stat /= 0) then
+            call io_report_error(IO_ERR_ALLOC, &
+               "Failed to expand file registry", &
+               "registry_add_file")
+            return
+         end if
          temp(1:this%count) = this%files(1:this%count)
          call move_alloc(temp, this%files)
       end if
@@ -657,11 +742,18 @@ contains
    !---------------------------------------------------------------------------
    subroutine file_init_restart_buffer(this)
       class(output_file_def), intent(inout) :: this
+      integer :: alloc_stat
 
       if (.not. this%is_restart) return
       
       if (allocated(this%restart_times)) deallocate(this%restart_times)
-      allocate(this%restart_times(this%restart_nlevels))
+      allocate(this%restart_times(this%restart_nlevels), stat=alloc_stat)
+      if (alloc_stat /= 0) then
+         call io_report_error(IO_ERR_ALLOC, &
+            "Failed to allocate restart_times for file " // trim(this%name), &
+            "file_init_restart_buffer")
+         return
+      end if
       this%restart_times = 0.0
       this%restart_buffer_idx = 0
       this%restart_buffer_count = 0

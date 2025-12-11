@@ -77,18 +77,23 @@ contains
    subroutine allocate_ocean_vars(nx_in, ny_in, nz_in)
 #ifdef MPI
       use mpi_param, only: Lm, Mm, N
-      integer, intent(in), optional :: nx_in, ny_in, nz_in  ! Unused in MPI mode
-#else
-      integer, intent(in), optional :: nx_in, ny_in, nz_in
 #endif
+      integer, intent(in), optional :: nx_in, ny_in, nz_in
       
       integer :: nx, ny, nz
       
 #ifdef MPI
       ! In MPI mode, use local dimensions from mpi_param
+      ! (dummy arguments preserved for interface compatibility)
       nx = Lm
       ny = Mm
       nz = N
+      ! Silence unused argument warnings
+      if (.false.) then
+         if (present(nx_in)) nx = nx_in
+         if (present(ny_in)) ny = ny_in
+         if (present(nz_in)) nz = nz_in
+      end if
 #else
       ! In serial mode, use passed dimensions or defaults
       if (present(nx_in)) then

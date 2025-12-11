@@ -11,6 +11,9 @@
    ! Flush and verbosity
    nml_flush_freq = 0               ! Sync to disk every N writes (0=disabled)
    nml_verbose = 1                  ! 0=quiet, 1=normal, 2=debug
+   
+   ! Error handling (v5.3.0)
+   nml_strict_config = .false.      ! .true. = stop on first error, .false. = log and continue
 
    !---------------------------------------------------------------------------
    ! Variable groups - define reusable sets of variables
