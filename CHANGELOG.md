@@ -2,6 +2,50 @@
 
 All notable changes to MIAOU are documented in this file.
 
+## [6.1.0] - 2025-12
+
+### Added - NetCDF Read Support (P5)
+
+This release adds comprehensive NetCDF reading capabilities to complete
+the NetCDF backend functionality, enabling restart file reading.
+
+**New functions in `io_netcdf.F90`:**
+
+- `nc_open_file_readonly(filename, ncid)` — Open file for reading only
+- `nc_has_variable(ncid, var_name)` — Check if variable exists
+- `nc_get_var_shape(ncid, var_name, ndims, shape)` — Get variable dimensions
+- `nc_get_num_times(ncid)` — Get number of time records in file
+- `nc_get_time_values(ncid, times)` — Read all time values
+- `nc_read_0d(ncid, var_name, time_index, val)` — Read scalar variable
+- `nc_read_1d(ncid, var_name, time_index, val)` — Read 1D variable
+- `nc_read_2d(ncid, var_name, time_index, val)` — Read 2D variable
+- `nc_read_3d(ncid, var_name, time_index, val)` — Read 3D variable
+
+### Usage Example
+
+```fortran
+use io_netcdf
+
+integer :: ncid, status, ntimes
+real :: zeta(nx, ny)
+
+! Open and query
+status = nc_open_file_readonly("restart.nc", ncid)
+ntimes = nc_get_num_times(ncid)
+
+! Read last time level
+if (nc_has_variable(ncid, "zeta")) then
+   status = nc_read_2d(ncid, "zeta", ntimes, zeta)
+end if
+
+status = nc_close_file(ncid)
+```
+
+### Notes
+- All read functions handle both time-dependent and static variables
+- Error codes: `IO_ERR_READ`, `IO_ERR_VAR_NOTFOUND`, `IO_ERR_DIM_MISMATCH`
+- File size: 697 → 1041 lines (+344 lines)
+
 ## [6.0.0] - 2025-12
 
 ### Added - Multi-Backend Architecture (P4.1)

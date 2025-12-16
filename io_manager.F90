@@ -107,10 +107,12 @@ contains
    function initialize_io(config_file) result(status)
       character(len=*), intent(in), optional :: config_file
       integer :: status
+      character(len=64) :: io_mode
+#ifdef MPI
       logical :: nc4par_ok
       character(len=256) :: nc4par_msg
-      character(len=64) :: io_mode
       integer :: ierr
+#endif
 
       status = 0
 

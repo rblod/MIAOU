@@ -23,6 +23,8 @@ program main_test_output
    use io_manager
    use ocean_var
    use grid_module
+   use io_netcdf, only: nc_open_file_readonly, nc_close_file, nc_get_num_times, &
+                        nc_read_2d, nc_has_variable, nc_get_var_shape
 #ifdef MPI
    use mpi_param, only: is_master, Lm, Mm, N
    use mpi_setup, only: mpi_init_decomposition, mpi_finalize_all, mpi_barrier_all
@@ -263,6 +265,19 @@ program main_test_output
 
    status = finalize_io()
 
+   !---------------------------------------------------------------------------
+   ! Roundtrip read test (v6.1.0)
+   !---------------------------------------------------------------------------
+#ifndef PARALLEL_FILES
+#ifdef MPI
+   if (is_master) then
+#endif
+      call test_roundtrip_read()
+#ifdef MPI
+   end if
+#endif
+#endif
+
    ! Cleanup
    call deallocate_ocean_vars()
 
@@ -315,5 +330,95 @@ program main_test_output
    !---------------------------------------------------------------------------
    call mpi_finalize_all()
 #endif
+
+contains
+
+   !---------------------------------------------------------------------------
+   !> @brief Test roundtrip: read restart file and verify values (v6.1.0)
+   !---------------------------------------------------------------------------
+   subroutine test_roundtrip_read()
+      integer :: ncid, rd_status, ntimes, ndims
+      integer :: var_shape(4)
+      real, allocatable :: zeta_read(:,:)
+      real :: max_val, min_val
+      character(len=256) :: restart_file
+#ifndef MPI
+      real :: max_diff
+#endif
+      
+      logical :: file_exists
+      
+      restart_file = "ocean_restart_3600s.nc"
+      
+      print *, ""
+      print *, "--- Roundtrip read test (v6.1.0) ---"
+      
+      ! Check if file exists first (avoid error message)
+      inquire(file=restart_file, exist=file_exists)
+      if (.not. file_exists) then
+         print *, "  (Skipping: no restart file)"
+         return
+      end if
+      
+      ! Open restart file
+      rd_status = nc_open_file_readonly(restart_file, ncid)
+      if (rd_status /= 0) then
+         print *, "  ✗ Cannot open restart file"
+         return
+      end if
+      
+      ! Get number of time records
+      ntimes = nc_get_num_times(ncid)
+      print *, "  Time records in file:", ntimes
+      
+      ! Check zeta exists
+      if (.not. nc_has_variable(ncid, "zeta")) then
+         print *, "  ✗ Variable 'zeta' not found"
+         rd_status = nc_close_file(ncid)
+         return
+      end if
+      
+      ! Get shape and allocate with FILE dimensions (not memory dimensions)
+      rd_status = nc_get_var_shape(ncid, "zeta", ndims, var_shape)
+      print *, "  File zeta shape:", var_shape(1), "x", var_shape(2)
+      allocate(zeta_read(var_shape(1), var_shape(2)))
+      
+      ! Read last time level
+      rd_status = nc_read_2d(ncid, "zeta", ntimes, zeta_read)
+      if (rd_status /= 0) then
+         print *, "  ✗ Failed to read zeta"
+         deallocate(zeta_read)
+         rd_status = nc_close_file(ncid)
+         return
+      end if
+      
+      ! Verification
+      min_val = minval(zeta_read)
+      max_val = maxval(zeta_read)
+      print *, "  Read zeta range:", min_val, "to", max_val
+
+#ifdef MPI
+      ! In MPI mode: zeta in memory is LOCAL, file has GLOBAL domain
+      ! Just verify values are in reasonable range (zeta ~= 0.5*sin*cos ~ [-0.5, 0.5])
+      if (abs(min_val) < 1.0 .and. abs(max_val) < 1.0) then
+         print *, "  ✓ Roundtrip test PASSED (values in valid range)"
+      else
+         print *, "  ✗ Roundtrip test FAILED (values out of range)"
+      end if
+#else
+      ! In serial mode: direct comparison possible
+      max_diff = maxval(abs(zeta_read - zeta))
+      print *, "  Max difference (read vs memory):", max_diff
+      if (max_diff < 1.0e-6) then
+         print *, "  ✓ Roundtrip test PASSED"
+      else
+         print *, "  ✗ Roundtrip test FAILED"
+      end if
+#endif
+      
+      deallocate(zeta_read)
+      rd_status = nc_close_file(ncid)
+      
+   end subroutine test_roundtrip_read
 
 end program main_test_output

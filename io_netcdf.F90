@@ -39,6 +39,11 @@ module io_netcdf
    public :: nc_write_time
    ! Direct write (no buffer) - for instant outputs
    public :: nc_write_direct_0d, nc_write_direct_1d, nc_write_direct_2d, nc_write_direct_3d
+   ! v6.1.0: Read functions
+   public :: nc_open_file_readonly
+   public :: nc_read_0d, nc_read_1d, nc_read_2d, nc_read_3d
+   public :: nc_get_num_times, nc_get_time_values
+   public :: nc_get_var_shape, nc_has_variable
    ! Parallel support check (P3.1)
    public :: nc_has_parallel_support, nc_check_parallel_runtime
 #ifdef NC4PAR
@@ -693,5 +698,359 @@ contains
       deallocate(varids)
    end subroutine nc_set_all_parallel_access
 #endif
+
+   !===========================================================================
+   ! READ FUNCTIONS (v6.1.0)
+   !===========================================================================
+
+   !---------------------------------------------------------------------------
+   !> @brief Open a NetCDF file for reading only
+   !>
+   !> @param[in] filename Path to the NetCDF file
+   !> @param[out] ncid NetCDF file ID
+   !> @return Status (0 = success)
+   !---------------------------------------------------------------------------
+   function nc_open_file_readonly(filename, ncid) result(status)
+      character(len=*), intent(in) :: filename
+      integer, intent(out) :: ncid
+      integer :: status
+
+      integer :: ncstatus
+
+      status = -1
+      ncid = -1
+
+      ncstatus = nf90_open(filename, nf90_nowrite, ncid)
+      if (ncstatus /= nf90_noerr) then
+         call io_report_error(IO_ERR_FILE_OPEN, &
+            "Cannot open file for reading: " // trim(filename) // &
+            " (" // trim(nf90_strerror(ncstatus)) // ")", &
+            "nc_open_file_readonly")
+         return
+      end if
+
+      status = 0
+   end function nc_open_file_readonly
+
+   !---------------------------------------------------------------------------
+   !> @brief Check if a variable exists in a NetCDF file
+   !>
+   !> @param[in] ncid NetCDF file ID
+   !> @param[in] var_name Variable name
+   !> @return .true. if variable exists
+   !---------------------------------------------------------------------------
+   logical function nc_has_variable(ncid, var_name)
+      integer, intent(in) :: ncid
+      character(len=*), intent(in) :: var_name
+      
+      integer :: varid, ncstatus
+      
+      ncstatus = nf90_inq_varid(ncid, var_name, varid)
+      nc_has_variable = (ncstatus == nf90_noerr)
+   end function nc_has_variable
+
+   !---------------------------------------------------------------------------
+   !> @brief Get the shape of a variable
+   !>
+   !> @param[in] ncid NetCDF file ID
+   !> @param[in] var_name Variable name
+   !> @param[out] ndims Number of dimensions
+   !> @param[out] var_shape Array of dimension sizes (must be pre-allocated)
+   !> @return Status (0 = success)
+   !---------------------------------------------------------------------------
+   function nc_get_var_shape(ncid, var_name, ndims, var_shape) result(status)
+      integer, intent(in) :: ncid
+      character(len=*), intent(in) :: var_name
+      integer, intent(out) :: ndims
+      integer, intent(out) :: var_shape(:)
+      integer :: status
+
+      integer :: varid, ncstatus, i
+      integer :: dimids(10)
+
+      status = -1
+      ndims = 0
+      var_shape = 0
+
+      ncstatus = nf90_inq_varid(ncid, var_name, varid)
+      if (ncstatus /= nf90_noerr) then
+         call io_report_error(IO_ERR_VAR_NOTFOUND, &
+            "Variable not found: " // trim(var_name), &
+            "nc_get_var_shape")
+         return
+      end if
+
+      ncstatus = nf90_inquire_variable(ncid, varid, ndims=ndims)
+      if (ncstatus /= nf90_noerr) return
+
+      ncstatus = nf90_inquire_variable(ncid, varid, dimids=dimids(1:ndims))
+      if (ncstatus /= nf90_noerr) return
+
+      do i = 1, min(ndims, size(var_shape))
+         ncstatus = nf90_inquire_dimension(ncid, dimids(i), len=var_shape(i))
+         if (ncstatus /= nf90_noerr) return
+      end do
+
+      status = 0
+   end function nc_get_var_shape
+
+   !---------------------------------------------------------------------------
+   !> @brief Get number of time steps in file
+   !>
+   !> @param[in] ncid NetCDF file ID
+   !> @return Number of time steps, or -1 on error
+   !---------------------------------------------------------------------------
+   function nc_get_num_times(ncid) result(ntimes)
+      integer, intent(in) :: ncid
+      integer :: ntimes
+
+      integer :: time_dimid, ncstatus
+
+      ntimes = -1
+
+      ncstatus = nf90_inq_dimid(ncid, "time", time_dimid)
+      if (ncstatus /= nf90_noerr) return
+
+      ncstatus = nf90_inquire_dimension(ncid, time_dimid, len=ntimes)
+      if (ncstatus /= nf90_noerr) ntimes = -1
+   end function nc_get_num_times
+
+   !---------------------------------------------------------------------------
+   !> @brief Get all time values from file
+   !>
+   !> @param[in] ncid NetCDF file ID
+   !> @param[out] times Array of time values (must be pre-allocated)
+   !> @return Status (0 = success)
+   !---------------------------------------------------------------------------
+   function nc_get_time_values(ncid, times) result(status)
+      integer, intent(in) :: ncid
+      real, intent(out) :: times(:)
+      integer :: status
+
+      integer :: time_varid, ncstatus
+
+      status = -1
+
+      ncstatus = nf90_inq_varid(ncid, "time", time_varid)
+      if (ncstatus /= nf90_noerr) then
+         call io_report_error(IO_ERR_VAR_NOTFOUND, &
+            "Time variable not found", "nc_get_time_values")
+         return
+      end if
+
+      ncstatus = nf90_get_var(ncid, time_varid, times)
+      if (ncstatus /= nf90_noerr) then
+         call io_report_error(IO_ERR_READ, &
+            "Cannot read time values: " // trim(nf90_strerror(ncstatus)), &
+            "nc_get_time_values")
+         return
+      end if
+
+      status = 0
+   end function nc_get_time_values
+
+   !---------------------------------------------------------------------------
+   !> @brief Read a scalar variable at a specific time index
+   !>
+   !> @param[in] ncid NetCDF file ID
+   !> @param[in] var_name Variable name
+   !> @param[in] time_index Time index (1-based), 0 for timeless
+   !> @param[out] val Output value
+   !> @return Status (0 = success)
+   !---------------------------------------------------------------------------
+   function nc_read_0d(ncid, var_name, time_index, val) result(status)
+      integer, intent(in) :: ncid
+      character(len=*), intent(in) :: var_name
+      integer, intent(in) :: time_index
+      real, intent(out) :: val
+      integer :: status
+
+      integer :: varid, ncstatus, ndims
+      real :: val_arr(1)
+
+      status = -1
+      val = 0.0
+
+      ncstatus = nf90_inq_varid(ncid, var_name, varid)
+      if (ncstatus /= nf90_noerr) then
+         call io_report_error(IO_ERR_VAR_NOTFOUND, &
+            "Variable not found: " // trim(var_name), "nc_read_0d")
+         return
+      end if
+
+      ncstatus = nf90_inquire_variable(ncid, varid, ndims=ndims)
+      if (ndims == 0) then
+         ncstatus = nf90_get_var(ncid, varid, val)
+      else if (ndims == 1 .and. time_index > 0) then
+         ncstatus = nf90_get_var(ncid, varid, val_arr, start=[time_index], count=[1])
+         val = val_arr(1)
+      else
+         call io_report_error(IO_ERR_DIM_MISMATCH, &
+            "Variable " // trim(var_name) // " is not a scalar", "nc_read_0d")
+         return
+      end if
+
+      if (ncstatus /= nf90_noerr) then
+         call io_report_error(IO_ERR_READ, &
+            "Cannot read " // trim(var_name) // ": " // trim(nf90_strerror(ncstatus)), &
+            "nc_read_0d")
+         return
+      end if
+
+      status = 0
+   end function nc_read_0d
+
+   !---------------------------------------------------------------------------
+   !> @brief Read a 1D variable at a specific time index
+   !>
+   !> @param[in] ncid NetCDF file ID
+   !> @param[in] var_name Variable name
+   !> @param[in] time_index Time index (1-based), 0 for timeless
+   !> @param[out] val Output array (must be pre-allocated)
+   !> @return Status (0 = success)
+   !---------------------------------------------------------------------------
+   function nc_read_1d(ncid, var_name, time_index, val) result(status)
+      integer, intent(in) :: ncid
+      character(len=*), intent(in) :: var_name
+      integer, intent(in) :: time_index
+      real, intent(out) :: val(:)
+      integer :: status
+
+      integer :: varid, ncstatus, ndims, n1
+
+      status = -1
+      n1 = size(val, 1)
+
+      ncstatus = nf90_inq_varid(ncid, var_name, varid)
+      if (ncstatus /= nf90_noerr) then
+         call io_report_error(IO_ERR_VAR_NOTFOUND, &
+            "Variable not found: " // trim(var_name), "nc_read_1d")
+         return
+      end if
+
+      ncstatus = nf90_inquire_variable(ncid, varid, ndims=ndims)
+      
+      if (ndims == 1) then
+         ncstatus = nf90_get_var(ncid, varid, val)
+      else if (ndims == 2 .and. time_index > 0) then
+         ncstatus = nf90_get_var(ncid, varid, val, start=[1, time_index], count=[n1, 1])
+      else
+         call io_report_error(IO_ERR_DIM_MISMATCH, &
+            "Variable " // trim(var_name) // " dimension mismatch", "nc_read_1d")
+         return
+      end if
+
+      if (ncstatus /= nf90_noerr) then
+         call io_report_error(IO_ERR_READ, &
+            "Cannot read " // trim(var_name) // ": " // trim(nf90_strerror(ncstatus)), &
+            "nc_read_1d")
+         return
+      end if
+
+      status = 0
+   end function nc_read_1d
+
+   !---------------------------------------------------------------------------
+   !> @brief Read a 2D variable at a specific time index
+   !>
+   !> @param[in] ncid NetCDF file ID
+   !> @param[in] var_name Variable name
+   !> @param[in] time_index Time index (1-based), 0 for timeless
+   !> @param[out] val Output array (must be pre-allocated)
+   !> @return Status (0 = success)
+   !---------------------------------------------------------------------------
+   function nc_read_2d(ncid, var_name, time_index, val) result(status)
+      integer, intent(in) :: ncid
+      character(len=*), intent(in) :: var_name
+      integer, intent(in) :: time_index
+      real, intent(out) :: val(:,:)
+      integer :: status
+
+      integer :: varid, ncstatus, ndims, n1, n2
+
+      status = -1
+      n1 = size(val, 1)
+      n2 = size(val, 2)
+
+      ncstatus = nf90_inq_varid(ncid, var_name, varid)
+      if (ncstatus /= nf90_noerr) then
+         call io_report_error(IO_ERR_VAR_NOTFOUND, &
+            "Variable not found: " // trim(var_name), "nc_read_2d")
+         return
+      end if
+
+      ncstatus = nf90_inquire_variable(ncid, varid, ndims=ndims)
+      
+      if (ndims == 2) then
+         ncstatus = nf90_get_var(ncid, varid, val)
+      else if (ndims == 3 .and. time_index > 0) then
+         ncstatus = nf90_get_var(ncid, varid, val, start=[1, 1, time_index], count=[n1, n2, 1])
+      else
+         call io_report_error(IO_ERR_DIM_MISMATCH, &
+            "Variable " // trim(var_name) // " dimension mismatch", "nc_read_2d")
+         return
+      end if
+
+      if (ncstatus /= nf90_noerr) then
+         call io_report_error(IO_ERR_READ, &
+            "Cannot read " // trim(var_name) // ": " // trim(nf90_strerror(ncstatus)), &
+            "nc_read_2d")
+         return
+      end if
+
+      status = 0
+   end function nc_read_2d
+
+   !---------------------------------------------------------------------------
+   !> @brief Read a 3D variable at a specific time index
+   !>
+   !> @param[in] ncid NetCDF file ID
+   !> @param[in] var_name Variable name
+   !> @param[in] time_index Time index (1-based), 0 for timeless
+   !> @param[out] val Output array (must be pre-allocated)
+   !> @return Status (0 = success)
+   !---------------------------------------------------------------------------
+   function nc_read_3d(ncid, var_name, time_index, val) result(status)
+      integer, intent(in) :: ncid
+      character(len=*), intent(in) :: var_name
+      integer, intent(in) :: time_index
+      real, intent(out) :: val(:,:,:)
+      integer :: status
+
+      integer :: varid, ncstatus, ndims, n1, n2, n3
+
+      status = -1
+      n1 = size(val, 1)
+      n2 = size(val, 2)
+      n3 = size(val, 3)
+
+      ncstatus = nf90_inq_varid(ncid, var_name, varid)
+      if (ncstatus /= nf90_noerr) then
+         call io_report_error(IO_ERR_VAR_NOTFOUND, &
+            "Variable not found: " // trim(var_name), "nc_read_3d")
+         return
+      end if
+
+      ncstatus = nf90_inquire_variable(ncid, varid, ndims=ndims)
+      
+      if (ndims == 3) then
+         ncstatus = nf90_get_var(ncid, varid, val)
+      else if (ndims == 4 .and. time_index > 0) then
+         ncstatus = nf90_get_var(ncid, varid, val, start=[1, 1, 1, time_index], count=[n1, n2, n3, 1])
+      else
+         call io_report_error(IO_ERR_DIM_MISMATCH, &
+            "Variable " // trim(var_name) // " dimension mismatch", "nc_read_3d")
+         return
+      end if
+
+      if (ncstatus /= nf90_noerr) then
+         call io_report_error(IO_ERR_READ, &
+            "Cannot read " // trim(var_name) // ": " // trim(nf90_strerror(ncstatus)), &
+            "nc_read_3d")
+         return
+      end if
+
+      status = 0
+   end function nc_read_3d
 
 end module io_netcdf
