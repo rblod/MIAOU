@@ -1,0 +1,42 @@
+&io_files_nml
+   nml_output_prefix = "edge"
+   nml_time_units = "seconds since 2023-01-01 00:00:00"
+   nml_calendar = "gregorian"
+   nml_compression = .false.
+   nml_compression_level = 0
+   nml_strict_config = .false.
+   nml_validate_vars = .true.
+   nml_warn_empty_files = .true.
+   
+   file_name(1) = "every_step"
+   file_freq(1) = 3600.0
+   file_operation(1) = "instant"
+   file_vars(1) = "zeta"
+   
+   file_name(2) = "short_avg"
+   file_freq(2) = 7200.0
+   file_operation(2) = "average"
+   file_vars(2) = "temp"
+   
+   file_name(3) = "scalar_only"
+   file_freq(3) = 10800.0
+   file_operation(3) = "instant"
+   file_vars(3) = "wind_speed"
+   
+   file_name(4) = "profile_only"
+   file_freq(4) = 10800.0
+   file_operation(4) = "instant"
+   file_vars(4) = "temp_profile"
+   
+   file_name(5) = "all_vars"
+   file_freq(5) = 21600.0
+   file_operation(5) = "instant"
+   file_vars(5) = "zeta, u, v, temp, wind_speed, temp_profile"
+   
+   file_name(6) = "restart_min"
+   file_freq(6) = 3600.0
+   file_vars(6) = "zeta, temp"
+   file_restart(6) = .true.
+   file_restart_nlevels(6) = 1
+   file_double(6) = .false.
+/
