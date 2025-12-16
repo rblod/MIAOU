@@ -106,9 +106,12 @@ module io_file_registry
       character(len=IO_VARNAME_LEN), allocatable :: variables(:)
       integer :: num_variables = 0
       
+      ! Backend selection (see io_backend module)
+      integer :: backend = 1                          !< Backend type ID (default: BACKEND_NETCDF)
+      
       ! Runtime state
       character(len=IO_PATH_LEN) :: filename = ""     !< Generated filename
-      integer :: backend_id = -1                      !< Backend file handle
+      integer :: ncid = -1                            !< NetCDF file handle (or backend-specific ID)
       integer :: time_dimid = -1                      !< Time dimension ID
       integer :: time_varid = -1                      !< Time variable ID
       integer :: time_index = 1                       !< Current time index
@@ -589,7 +592,7 @@ contains
    function file_is_open(this) result(is_open)
       class(output_file_def), intent(in) :: this
       logical :: is_open
-      is_open = (this%backend_id > 0)
+      is_open = (this%ncid > 0)
    end function file_is_open
 
    !---------------------------------------------------------------------------

@@ -43,7 +43,7 @@ SRCS_MPI = mpi_param.F90 mpi_setup.F90 io_mpi_sync.F90
 
 # Core modules (always compiled)
 SRCS_L0 = io_constants.F90 io_error.F90 grid_module.F90
-SRCS_L1 = io_naming.F90 netcdf_utils.F90 io_definitions.F90
+SRCS_L1 = io_backend.F90 io_naming.F90 netcdf_utils.F90 io_definitions.F90
 SRCS_L2 = netcdf_backend.F90 io_file_registry.F90
 SRCS_L2b = io_state.F90
 SRCS_L3 = io_netcdf.F90 io_config.F90
@@ -171,6 +171,9 @@ grid_module.o: grid_module.F90
 	$(if $(findstring -DMPI,$(FFLAGS)),$(MPIF90),$(FC)) $(FFLAGS) -c $<
 
 # Level 1
+io_backend.o: io_backend.F90
+	$(if $(findstring -DMPI,$(FFLAGS)),$(MPIF90),$(FC)) $(FFLAGS) -c $<
+
 io_naming.o: io_naming.F90 io_constants.o
 	$(if $(findstring -DMPI,$(FFLAGS)),$(MPIF90),$(FC)) $(FFLAGS) -c $<
 
@@ -195,7 +198,7 @@ io_state.o: io_state.F90 io_file_registry.o io_definitions.o
 io_netcdf.o: io_netcdf.F90 io_constants.o netcdf_utils.o netcdf_backend.o grid_module.o io_definitions.o io_file_registry.o io_error.o
 	$(if $(findstring -DMPI,$(FFLAGS)),$(MPIF90),$(FC)) $(FFLAGS) -c $<
 
-io_config.o: io_config.F90 io_constants.o io_file_registry.o io_state.o io_error.o
+io_config.o: io_config.F90 io_constants.o io_file_registry.o io_state.o io_error.o io_backend.o
 	$(if $(findstring -DMPI,$(FFLAGS)),$(MPIF90),$(FC)) $(FFLAGS) -c $<
 
 # Level 4 - io_manager depends on io_state

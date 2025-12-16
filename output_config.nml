@@ -19,8 +19,22 @@
    nml_validate_vars = .true.       ! Validate that referenced variables are registered
    nml_warn_empty_files = .true.    ! Warn if an output file has no variables
    
-   ! NC4PAR control (v5.5.0) - only relevant when compiled with -DNC4PAR
-   nml_nc4par_required = .true.     ! .true. = STOP if NC4PAR fails, .false. = warn and continue
+   ! NC4PAR control (v5.5.0)
+   nml_nc4par_required = .true.     ! If compiled with -DNC4PAR, require it to work
+                                    ! .false. = continue with degraded I/O if NC4PAR fails
+
+   !---------------------------------------------------------------------------
+   ! Backend selection (v6.0.0)
+   ! Each file can use a different I/O backend:
+   !   - 'netcdf' (default): Standard NetCDF/HDF5 (read/write)
+   !   - 'xios':  XIOS I/O server (write only, async, requires -DUSE_XIOS)
+   !   - 'adios2': ADIOS2 (read/write, staging, requires -DUSE_ADIOS2)
+   !
+   ! Typical usage:
+   !   - History/averages: 'xios' for async performance
+   !   - Restart files: 'netcdf' for reliability and readability
+   !   - Input files: 'netcdf' only (XIOS can't read)
+   !---------------------------------------------------------------------------
 
    !---------------------------------------------------------------------------
    ! Variable groups - define reusable sets of variables
@@ -51,12 +65,14 @@
    file_freq(1) = 3600.0
    file_operation(1) = "instant"
    file_vars(1) = "@surface,@atm"
+   ! file_backend(1) = "xios"      ! Uncomment to use XIOS for async I/O
 
    ! File 2: 6-hourly instantaneous - SSH + temperature
    file_name(2) = "6hourly"
    file_freq(2) = 21600.0
    file_operation(2) = "instant"
    file_vars(2) = "zeta,temp"
+   file_backend(2) = "netcdf"      ! Explicit default (can be omitted)
 
    ! File 3: Daily averages - surface + thermo
    file_name(3) = "daily_avg"
@@ -65,6 +81,7 @@
    file_vars(3) = "@surface,@thermo"
    
    ! File 4: Restart - every hour, keep last 2 levels
+   ! Always use netcdf for restarts (must be readable)
    file_name(4) = "restart"
    file_freq(4) = 3600.0
    file_operation(4) = "instant"
@@ -72,4 +89,5 @@
    file_restart(4) = .true.
    file_restart_nlevels(4) = 2
    file_double(4) = .true.
+   file_backend(4) = "netcdf"      ! Restarts: always NetCDF (readable)
 /

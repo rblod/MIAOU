@@ -2,6 +2,54 @@
 
 All notable changes to MIAOU are documented in this file.
 
+## [6.0.0] - 2025-12
+
+### Added - Multi-Backend Architecture (P4.1)
+
+This major release introduces the foundation for supporting multiple I/O backends
+(NetCDF, XIOS, ADIOS2), allowing each output file to use a different backend.
+
+- **New module `io_backend.F90`**:
+  - Backend identification: `BACKEND_NETCDF`, `BACKEND_XIOS`, `BACKEND_ADIOS2`
+  - Capability queries: `backend_can_read()`, `backend_can_write()`, 
+    `backend_supports_parallel_io()`, `backend_supports_compression()`,
+    `backend_supports_streaming()`, `backend_supports_staging()`
+  - Responsibility queries (who controls what):
+    - `backend_manages_config()` — Backend has external config (XML)
+    - `backend_manages_timing()` — Backend decides when to write
+    - `backend_manages_operations()` — Backend does averaging/compression
+    - `backend_supports_steps()` — Backend has begin_step/end_step concept
+    - `backend_needs_collective_calls()` — All MPI ranks must participate
+  - Utility functions: `backend_from_string()`, `backend_to_string()`,
+    `backend_is_available()`, `backend_print_info()`
+
+- **Per-file backend selection**:
+  - New `file_backend(i)` namelist option: `'netcdf'`, `'xios'`, `'adios2'`
+  - Default: `'netcdf'` (always available)
+  - Allows mixing backends, e.g.:
+    ```fortran
+    file_backend(1) = "xios"    ! History: async for performance
+    file_backend(2) = "netcdf"  ! Restart: must be readable
+    ```
+
+- **New field in `output_file_def`**:
+  - `backend` field stores backend ID for each file
+  - `ncid` (renamed from `backend_id`) stores file handle
+
+### Changed
+- **Renamed** `backend_id` → `ncid` in `output_file_def` for clarity
+  (it's the NetCDF file handle, not the backend type)
+- **Updated** io_manager.F90 to use `ncid` consistently
+
+### Architecture Notes
+This release establishes the capability query system that will be used by:
+- P5: NetCDF reading (`backend_can_read()`)
+- P6: XIOS backend (`backend_manages_timing()`, `backend_manages_operations()`)
+- P7: ADIOS2 backend (`backend_supports_steps()`, `backend_supports_staging()`)
+
+The dispatch pattern is intentionally simple (select case) to avoid over-engineering
+while maintaining extensibility.
+
 ## [5.5.0] - 2025-12
 
 ### Added
@@ -21,14 +69,27 @@ All notable changes to MIAOU are documented in this file.
   - `--ci` option disables colors for cleaner CI logs
   - `--help` option shows usage
   - Proper exit codes (0=pass, 1=fail)
+- **Edge case tests** (`test_edge_cases.nml`):
+  - High-frequency output (every timestep)
+  - Short averaging periods (2 samples)
+  - Scalar variable (0D) output
+  - Profile variable (1D) output
+  - All variables in single file
+  - Minimal restart (single level, single precision)
+- **Inter-mode comparison** (`compare_outputs.py`):
+  - Compares NetCDF outputs from serial vs MPI modes
+  - Verifies numerical consistency across I/O backends
+  - JUnit XML output support
 
 ### Changed
 - Config is now read BEFORE NC4PAR check (so `nml_nc4par_required` takes effect)
 - Test suite cleanup no longer deletes .o/.mod files (faster consecutive test runs)
 - I/O mode is displayed at initialization for better diagnostics
+- Test suite expanded: `edge_cases`, `compare` tests added to default run
 
 ### Fixed
 - Warning messages no longer show spurious `[SUCCESS]` code
+- Color codes in shell scripts now use `$(printf '\033[...')` for proper terminal handling
 
 ## [5.4.0] - 2025-12
 

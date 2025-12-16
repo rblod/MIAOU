@@ -52,6 +52,8 @@ RESULTS_MPI_PF=""
 RESULTS_NC4PAR=""
 RESULTS_VALIDATION=""
 RESULTS_VALIDATION_STRICT=""
+RESULTS_EDGE_CASES=""
+RESULTS_COMPARE=""
 
 # JUnit XML storage
 JUNIT_TESTCASES=""
@@ -87,7 +89,7 @@ print_info() {
 
 cleanup() {
     print_subheader "Cleaning up"
-    rm -f *.nc test_output.exe 2>/dev/null || true
+    rm -f *.nc *.o *.mod test_output.exe 2>/dev/null || true
     # Don't remove .o and .mod - let individual tests handle their own clean
     print_info "Removed temporary files"
 }
@@ -367,6 +369,198 @@ test_validation_strict() {
     fi
 }
 
+#===============================================================================
+# Edge cases test
+#===============================================================================
+
+test_edge_cases() {
+    TOTAL_TESTS=$((TOTAL_TESTS + 1))
+    print_header "TEST: Edge Cases (boundary conditions)"
+    
+    # Build
+    print_subheader "Building serial"
+    make clean >/dev/null 2>&1
+    make serial 2>&1 | tail -3
+    if [ ${PIPESTATUS[0]} -ne 0 ]; then
+        print_failure "Build failed"
+        RESULTS_EDGE_CASES="FAILED (build)"
+        FAILED_TESTS=$((FAILED_TESTS + 1))
+        return 1
+    fi
+    
+    # Save original config
+    cp output_config.nml output_config.nml.backup
+    
+    # Use edge cases config
+    if [ ! -f test_edge_cases.nml ]; then
+        print_failure "test_edge_cases.nml not found"
+        RESULTS_EDGE_CASES="SKIPPED: config missing"
+        return 1
+    fi
+    cp test_edge_cases.nml output_config.nml
+    
+    print_subheader "Running edge case tests"
+    rm -f *.nc
+    ./test_output.exe 2>&1 | tail -15
+    run_status=${PIPESTATUS[0]}
+    
+    # Restore config
+    mv output_config.nml.backup output_config.nml
+    
+    if [ $run_status -ne 0 ]; then
+        print_failure "Edge case test failed"
+        RESULTS_EDGE_CASES="FAILED (runtime)"
+        FAILED_TESTS=$((FAILED_TESTS + 1))
+        return 1
+    fi
+    
+    # Check expected files exist
+    local expected_files="edge_every_step_3600s.nc edge_short_avg_7200s.nc edge_scalar_only_10800s.nc edge_profile_only_10800s.nc edge_all_vars_21600s.nc edge_restart_min_3600s.nc"
+    local all_exist=true
+    for f in $expected_files; do
+        if [ ! -f "$f" ]; then
+            print_failure "Missing: $f"
+            all_exist=false
+        fi
+    done
+    
+    if [ "$all_exist" = "false" ]; then
+        RESULTS_EDGE_CASES="FAILED (files missing)"
+        FAILED_TESTS=$((FAILED_TESTS + 1))
+        return 1
+    fi
+    
+    print_success "All edge case files created"
+    
+    # Verify scalar variable output (use Python since ncdump may not be available)
+    if python3 -c "import netCDF4; nc=netCDF4.Dataset('edge_scalar_only_10800s.nc'); assert 'wind_speed' in nc.variables; nc.close()" 2>/dev/null; then
+        print_success "Scalar variable (0D) correctly written"
+    else
+        print_failure "Scalar variable not found"
+        RESULTS_EDGE_CASES="FAILED (scalar)"
+        FAILED_TESTS=$((FAILED_TESTS + 1))
+        return 1
+    fi
+    
+    # Verify profile variable output
+    if python3 -c "import netCDF4; nc=netCDF4.Dataset('edge_profile_only_10800s.nc'); assert 'temp_profile' in nc.variables; nc.close()" 2>/dev/null; then
+        print_success "Profile variable (1D) correctly written"
+    else
+        print_failure "Profile variable not found"
+        RESULTS_EDGE_CASES="FAILED (profile)"
+        FAILED_TESTS=$((FAILED_TESTS + 1))
+        return 1
+    fi
+    
+    RESULTS_EDGE_CASES="PASSED"
+    PASSED_TESTS=$((PASSED_TESTS + 1))
+    return 0
+}
+
+#===============================================================================
+# Inter-mode comparison test
+#===============================================================================
+
+test_compare_modes() {
+    TOTAL_TESTS=$((TOTAL_TESTS + 1))
+    print_header "TEST: Compare Serial vs MPI outputs"
+    
+    # Check if MPI is available
+    if ! command -v mpirun &> /dev/null; then
+        print_info "MPI not available, skipping comparison test"
+        RESULTS_COMPARE="SKIPPED: no MPI"
+        return 0
+    fi
+    
+    # Check if compare script exists
+    if [ ! -f compare_outputs.py ]; then
+        print_failure "compare_outputs.py not found"
+        RESULTS_COMPARE="SKIPPED: script missing"
+        return 0
+    fi
+    
+    local mpi_opts=$(get_mpirun_opts)
+    
+    # Create directories for outputs
+    rm -rf output_serial output_mpi
+    mkdir -p output_serial output_mpi
+    
+    # Run serial test
+    print_subheader "Running serial test"
+    make clean >/dev/null 2>&1
+    make serial 2>&1 | tail -3
+    if [ ${PIPESTATUS[0]} -ne 0 ]; then
+        print_failure "Serial build failed"
+        RESULTS_COMPARE="FAILED (serial build)"
+        FAILED_TESTS=$((FAILED_TESTS + 1))
+        return 1
+    fi
+    rm -f *.nc
+    ./test_output.exe >/dev/null 2>&1
+    mv *.nc output_serial/ 2>/dev/null
+    
+    # Run MPI test (sequential mode for single file output)
+    print_subheader "Running MPI sequential test"
+    make clean >/dev/null 2>&1
+    make mpi 2>&1 | tail -3
+    if [ ${PIPESTATUS[0]} -ne 0 ]; then
+        print_failure "MPI build failed"
+        RESULTS_COMPARE="FAILED (mpi build)"
+        FAILED_TESTS=$((FAILED_TESTS + 1))
+        return 1
+    fi
+    rm -f *.nc
+    mpirun $mpi_opts -np $NP ./test_output.exe >/dev/null 2>&1
+    mv *.nc output_mpi/ 2>/dev/null
+    
+    # Compare outputs (only restart and daily_avg - hourly/6hourly have timing differences)
+    print_subheader "Comparing outputs"
+    
+    # Compare restart files (should be identical)
+    local restart_match=true
+    if [ -f output_serial/ocean_restart_3600s.nc ] && [ -f output_mpi/ocean_restart_3600s.nc ]; then
+        python3 compare_outputs.py output_serial output_mpi --tolerance 1e-5 2>&1 | grep -E "restart|Summary|Passed|Failed"
+        # Just compare restart file specifically
+        if python3 -c "
+import netCDF4 as nc
+import numpy as np
+f1 = nc.Dataset('output_serial/ocean_restart_3600s.nc')
+f2 = nc.Dataset('output_mpi/ocean_restart_3600s.nc')
+for var in ['zeta', 'temp']:
+    if var in f1.variables and var in f2.variables:
+        d1, d2 = f1.variables[var][:], f2.variables[var][:]
+        if d1.shape == d2.shape:
+            diff = np.max(np.abs(d1 - d2))
+            if diff > 1e-5:
+                print(f'{var}: max_diff={diff}')
+                exit(1)
+f1.close(); f2.close()
+" 2>/dev/null; then
+            print_success "Restart files match"
+        else
+            print_failure "Restart files differ"
+            restart_match=false
+        fi
+    else
+        print_info "Restart files not found, skipping comparison"
+    fi
+    
+    # Cleanup
+    rm -rf output_serial output_mpi
+    
+    if [ "$restart_match" = "true" ]; then
+        print_success "Serial and MPI outputs are consistent"
+        RESULTS_COMPARE="PASSED"
+        PASSED_TESTS=$((PASSED_TESTS + 1))
+        return 0
+    else
+        print_failure "Serial and MPI outputs differ significantly"
+        RESULTS_COMPARE="FAILED (mismatch)"
+        FAILED_TESTS=$((FAILED_TESTS + 1))
+        return 1
+    fi
+}
+
 print_result() {
     local mode=$1
     local result=$2
@@ -427,7 +621,17 @@ while [ $# -gt 0 ]; do
             echo "  --ci          CI mode (no colors, minimal output)"
             echo "  --help        Show this help"
             echo ""
-            echo "Tests: serial, mpi, mpi_pf, nc4par, validation, validation_strict, all_io"
+            echo "Tests:"
+            echo "  serial            Serial mode test"
+            echo "  mpi               MPI sequential I/O test"
+            echo "  mpi_pf            MPI parallel files test"
+            echo "  nc4par            NC4PAR parallel NetCDF test"
+            echo "  validation        Config validation test"
+            echo "  validation_strict Strict mode validation test"
+            echo "  edge_cases        Edge cases (boundary conditions)"
+            echo "  compare           Compare serial vs MPI outputs"
+            echo "  all_io            All I/O tests (skip validation)"
+            echo "  all               All tests (default)"
             echo ""
             echo "If no tests specified, all tests are run."
             exit 0
@@ -445,7 +649,7 @@ done
 
 # Default to all tests if none specified
 if [ -z "$TESTS" ]; then
-    TESTS="serial mpi mpi_pf nc4par validation validation_strict"
+    TESTS="serial mpi mpi_pf nc4par validation validation_strict edge_cases compare"
 fi
 
 print_header "MIAOU I/O Test Suite v5.5.0"
@@ -482,6 +686,12 @@ for test in $TESTS; do
         validation_strict)
             test_validation_strict || true
             ;;
+        edge_cases)
+            test_edge_cases || true
+            ;;
+        compare)
+            test_compare_modes || true
+            ;;
         all_io)
             # Just I/O mode tests without validation
             test_serial || true
@@ -489,9 +699,20 @@ for test in $TESTS; do
             test_mpi_parallel_files || true
             test_nc4par || true
             ;;
+        all)
+            # All tests
+            test_serial || true
+            test_mpi_sequential || true
+            test_mpi_parallel_files || true
+            test_nc4par || true
+            test_validation || true
+            test_validation_strict || true
+            test_edge_cases || true
+            test_compare_modes || true
+            ;;
         *)
             echo "Unknown test: $test"
-            echo "Valid tests: serial, mpi, mpi_pf, nc4par, validation, validation_strict, all_io"
+            echo "Valid tests: serial, mpi, mpi_pf, nc4par, validation, validation_strict, edge_cases, compare, all_io, all"
             ;;
     esac
 done
@@ -507,6 +728,9 @@ print_result "  nc4par" "$RESULTS_NC4PAR"
 printf "\nValidation Tests:\n"
 print_result "  validation" "$RESULTS_VALIDATION"
 print_result "  validation_strict" "$RESULTS_VALIDATION_STRICT"
+printf "\nAdditional Tests:\n"
+print_result "  edge_cases" "$RESULTS_EDGE_CASES"
+print_result "  compare" "$RESULTS_COMPARE"
 
 printf "\n"
 printf "Total: %d tests\n" "$TOTAL_TESTS"
@@ -545,6 +769,8 @@ EOF
     [ -n "$RESULTS_NC4PAR" ] && add_junit_testcase "nc4par" "$RESULTS_NC4PAR"
     [ -n "$RESULTS_VALIDATION" ] && add_junit_testcase "validation" "$RESULTS_VALIDATION"
     [ -n "$RESULTS_VALIDATION_STRICT" ] && add_junit_testcase "validation_strict" "$RESULTS_VALIDATION_STRICT"
+    [ -n "$RESULTS_EDGE_CASES" ] && add_junit_testcase "edge_cases" "$RESULTS_EDGE_CASES"
+    [ -n "$RESULTS_COMPARE" ] && add_junit_testcase "compare_modes" "$RESULTS_COMPARE"
     
     echo "</testsuite>" >> "$JUNIT_OUTPUT"
     

@@ -192,8 +192,8 @@ contains
          file_ptr => file_registry%get_ptr(i)
          if (associated(file_ptr)) then
             if (file_ptr%is_open()) then
-               status = nc_close_file(file_ptr%backend_id)
-               file_ptr%backend_id = -1
+               status = nc_close_file(file_ptr%ncid)
+               file_ptr%ncid = -1
             end if
          end if
       end do
@@ -375,8 +375,8 @@ contains
          if (.not. associated(file_ptr)) cycle
          
          ! Open file if not already open
-         if (file_ptr%backend_id < 0) then
-            status = nc_open_file(file_ptr%filename, file_ptr%backend_id, &
+         if (file_ptr%ncid < 0) then
+            status = nc_open_file(file_ptr%filename, file_ptr%ncid, &
                                   file_ptr%time_dimid, file_ptr%time_varid)
             if (status /= 0) then
                call io_report_error(IO_ERR_FILE_OPEN, &
@@ -401,9 +401,9 @@ contains
          if (.not. associated(file_ptr)) cycle
          
          ! Close file if open
-         if (file_ptr%backend_id > 0) then
-            status = nc_close_file(file_ptr%backend_id)
-            file_ptr%backend_id = -1  ! Mark as closed
+         if (file_ptr%ncid > 0) then
+            status = nc_close_file(file_ptr%ncid)
+            file_ptr%ncid = -1  ! Mark as closed
          end if
       end do
    end subroutine close_all_files_seq
@@ -447,9 +447,9 @@ contains
             if (file_ptr%time_index > file_ptr%restart_nlevels) then
                needs_rotation = 1
                ! Close and recreate file
-               if (file_ptr%backend_id > 0) then
-                  status = nc_close_file(file_ptr%backend_id)
-                  file_ptr%backend_id = -1
+               if (file_ptr%ncid > 0) then
+                  status = nc_close_file(file_ptr%ncid)
+                  file_ptr%ncid = -1
                end if
                call recreate_restart_file(file_ptr)
                ! time_index is now 1 after recreate
@@ -562,7 +562,7 @@ contains
             ! Create the file
             status = nc_create_file(filename, file_ptr%name, file_ptr%frequency, &
                                     get_time_units(), get_calendar(), &
-                                    file_ptr%backend_id, file_ptr%time_dimid, &
+                                    file_ptr%ncid, file_ptr%time_dimid, &
                                     file_ptr%time_varid)
 
             if (status /= 0) then
@@ -576,21 +576,21 @@ contains
             call define_variables_in_file(file_ptr)
 
             ! End definition mode
-            status = nc_end_definition(file_ptr%backend_id)
+            status = nc_end_definition(file_ptr%ncid)
 
 #ifdef NC4PAR
             ! Set all variables to collective parallel access mode
-            call nc_set_all_parallel_access(file_ptr%backend_id)
+            call nc_set_all_parallel_access(file_ptr%ncid)
 #endif
 
 #if defined(MPI) && !defined(PARALLEL_FILES) && !defined(NC4PAR)
             ! Sequential I/O: master closes file after creation
-            status = nc_close_file(file_ptr%backend_id)
-            file_ptr%backend_id = -1  ! Mark as closed
+            status = nc_close_file(file_ptr%ncid)
+            file_ptr%ncid = -1  ! Mark as closed
 #endif
          else
             ! Non-master in sequential mode: mark file as not yet opened
-            file_ptr%backend_id = -1
+            file_ptr%ncid = -1
          end if
 
          if (io_verbose >= IO_NORMAL) then
@@ -637,7 +637,7 @@ contains
          if (.not. associated(var_ptr)) cycle
 
          ! Define in file
-         status = nc_define_variable_in_file(file_ptr%backend_id, file_ptr%time_dimid, var_ptr)
+         status = nc_define_variable_in_file(file_ptr%ncid, file_ptr%time_dimid, var_ptr)
          if (status /= 0) then
             call io_report_warning( &
                "Failed to define variable " // trim(var_name), &
@@ -686,7 +686,7 @@ contains
          ! Instantaneous: data written by send_var, just write time here
          if (file_ptr%data_written_this_step) then
             ! Write time value
-            status = nc_write_time(file_ptr%backend_id, file_ptr%time_varid, &
+            status = nc_write_time(file_ptr%ncid, file_ptr%time_varid, &
                                    file_ptr%time_index, current_time)
             call file_ptr%increment_time()
             call maybe_flush(file_ptr)
@@ -737,8 +737,8 @@ contains
 #if !defined(MPI) || defined(PARALLEL_FILES) || defined(NC4PAR)
          if (file_ptr%time_index > file_ptr%restart_nlevels) then
             ! Reopen file in overwrite mode
-            if (file_ptr%backend_id > 0) then
-               status = nc_close_file(file_ptr%backend_id)
+            if (file_ptr%ncid > 0) then
+               status = nc_close_file(file_ptr%ncid)
             end if
             call recreate_restart_file(file_ptr)
          end if
@@ -761,7 +761,7 @@ contains
 
       status = nc_create_file(file_ptr%filename, file_ptr%name, file_ptr%frequency, &
                               get_time_units(), get_calendar(), &
-                              file_ptr%backend_id, file_ptr%time_dimid, &
+                              file_ptr%ncid, file_ptr%time_dimid, &
                               file_ptr%time_varid)
 
       if (status /= 0) then
@@ -779,14 +779,14 @@ contains
          var_ptr => var_registry%get_ptr(var_idx)
          if (.not. associated(var_ptr)) cycle
 
-         status = nc_define_variable_in_file(file_ptr%backend_id, file_ptr%time_dimid, var_ptr)
+         status = nc_define_variable_in_file(file_ptr%ncid, file_ptr%time_dimid, var_ptr)
       end do
 
-      status = nc_end_definition(file_ptr%backend_id)
+      status = nc_end_definition(file_ptr%ncid)
       
 #ifdef NC4PAR
       ! Set all variables to collective parallel access mode
-      call nc_set_all_parallel_access(file_ptr%backend_id)
+      call nc_set_all_parallel_access(file_ptr%ncid)
 #endif
 
       file_ptr%time_index = 1
@@ -811,11 +811,11 @@ contains
          var_ptr => var_registry%get_ptr(var_idx)
          if (.not. associated(var_ptr)) cycle
 
-         status = nc_write_variable_data(file_ptr%backend_id, file_ptr%time_index, var_ptr)
+         status = nc_write_variable_data(file_ptr%ncid, file_ptr%time_index, var_ptr)
       end do
 
       ! Write time
-      status = nc_write_time(file_ptr%backend_id, file_ptr%time_varid, &
+      status = nc_write_time(file_ptr%ncid, file_ptr%time_varid, &
                              file_ptr%time_index, current_time)
 
       if (io_verbose >= IO_NORMAL) then
@@ -868,13 +868,13 @@ contains
          if (.not. associated(state_ptr)) cycle
          if (.not. state_ptr%is_ready()) cycle
 
-         status = nc_write_avg_data(file_ptr%backend_id, file_ptr%time_index, &
+         status = nc_write_avg_data(file_ptr%ncid, file_ptr%time_index, &
                                     var_ptr, state_ptr)
          if (status == 0) any_written = .true.
       end do
 
       if (any_written) then
-         status = nc_write_time(file_ptr%backend_id, file_ptr%time_varid, &
+         status = nc_write_time(file_ptr%ncid, file_ptr%time_varid, &
                                 file_ptr%time_index, current_time)
          call file_ptr%increment_time()
          
@@ -916,10 +916,10 @@ contains
       integer :: status
       
       if (io_flush_freq <= 0) return
-      if (file_ptr%backend_id <= 0) return
+      if (file_ptr%ncid <= 0) return
       
       if (mod(file_ptr%time_index - 1, io_flush_freq) == 0) then
-         status = nf90_sync(file_ptr%backend_id)
+         status = nf90_sync(file_ptr%ncid)
          if (io_verbose >= IO_DEBUG) then
             print *, "  Flushed: ", trim(file_ptr%name)
          end if
@@ -971,13 +971,13 @@ contains
          
          ! Write directly (no buffer!)
          if (present(scalar)) then
-            status = nc_write_direct_0d(file_ptr%backend_id, var_name, file_ptr%time_index, scalar)
+            status = nc_write_direct_0d(file_ptr%ncid, var_name, file_ptr%time_index, scalar)
          else if (present(d1)) then
-            status = nc_write_direct_1d(file_ptr%backend_id, var_name, file_ptr%time_index, d1)
+            status = nc_write_direct_1d(file_ptr%ncid, var_name, file_ptr%time_index, d1)
          else if (present(d2)) then
-            status = nc_write_direct_2d(file_ptr%backend_id, var_name, file_ptr%time_index, d2)
+            status = nc_write_direct_2d(file_ptr%ncid, var_name, file_ptr%time_index, d2)
          else if (present(d3)) then
-            status = nc_write_direct_3d(file_ptr%backend_id, var_name, file_ptr%time_index, d3)
+            status = nc_write_direct_3d(file_ptr%ncid, var_name, file_ptr%time_index, d3)
          end if
          
          ! Mark that we wrote data to this file

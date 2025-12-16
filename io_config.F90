@@ -40,6 +40,7 @@ module io_config
    use io_file_registry, only: output_file_def, output_file_registry, &
                                OP_INSTANT, OP_AVERAGE, OP_MIN, OP_MAX, OP_ACCUMULATE
    use io_state, only: file_registry   ! v5.4.0: Registry now in io_state
+   use io_backend, only: backend_from_string, backend_to_string, BACKEND_NETCDF  ! v6.0.0
    use io_error
    implicit none
    private
@@ -124,6 +125,9 @@ contains
       logical :: file_restart(MAX_FILES)
       integer :: file_restart_nlevels(MAX_FILES)
       logical :: file_double(MAX_FILES)
+      
+      ! v6.0.0: Backend selection per file
+      character(len=16) :: file_backend(MAX_FILES)
 
       namelist /io_files_nml/ nml_output_prefix, nml_time_units, nml_calendar, &
                               nml_compression, nml_compression_level, &
@@ -132,7 +136,8 @@ contains
                               nml_nc4par_required, &
                               group_name, group_vars, &
                               file_name, file_freq, file_operation, file_vars, file_prefix, &
-                              file_restart, file_restart_nlevels, file_double
+                              file_restart, file_restart_nlevels, file_double, &
+                              file_backend
 
       integer :: iunit, ios, i
       type(output_file_def) :: file_def
@@ -162,6 +167,7 @@ contains
       file_restart = .false.
       file_restart_nlevels = 1
       file_double = .false.
+      file_backend = "netcdf"   ! v6.0.0: default backend
 
       ! Open and read namelist
       open(newunit=iunit, file=filename, status='old', action='read', iostat=ios)
@@ -256,6 +262,9 @@ contains
          file_def%is_restart = file_restart(i)
          file_def%restart_nlevels = file_restart_nlevels(i)
          file_def%double_precision = file_double(i)
+         
+         ! v6.0.0: Backend selection
+         file_def%backend = backend_from_string(file_backend(i))
 
          ! Expand groups in variable list and parse
          expanded_vars = expand_groups(file_vars(i))
